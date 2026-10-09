@@ -1,10 +1,10 @@
 package com.filevault.filevaultserver.action.role;
 
-import com.filevault.filevaultserver.exception.RoleAlreadyExistsException;
+import com.filevault.filevaultserver.exception.role.RoleAlreadyExistsException;
 import com.filevault.filevaultserver.models.Permission;
 import com.filevault.filevaultserver.models.Role;
-import com.filevault.filevaultserver.repository.PermissionRepository;
-import com.filevault.filevaultserver.repository.RoleRepository;
+import com.filevault.filevaultserver.repository.role.PermissionRepository;
+import com.filevault.filevaultserver.repository.role.RoleRepository;
 import com.filevault.filevaultserver.request.role.CreateRoleRequest;
 import com.filevault.filevaultserver.response.role.RoleResponse;
 import org.springframework.stereotype.Component;
@@ -42,7 +42,7 @@ public class CreateRoleAction {
 
     private void grantDynamicPermission(Role role) {
         Permission givePermission = permissionRepository.save(new Permission(
-                "roles:give:" + role.getRolName(), "Peut attribuer le rôle " + role.getRolName()));
+                "roles:give:" + role.getRolName(), "Can grant the role " + role.getRolName()));
         roleRepository.findByPermissions_PrmName(GRANT_ALL_PERMISSION)
                 .forEach(manager -> manager.getPermissions().add(givePermission));
     }

@@ -1,6 +1,6 @@
-package com.filevault.filevaultserver.repository;
+package com.filevault.filevaultserver.repository.user;
 
-import com.filevault.filevaultserver.exception.UserNotFoundException;
+import com.filevault.filevaultserver.exception.user.UserNotFoundException;
 import com.filevault.filevaultserver.models.User;
 import java.util.Optional;
 import java.util.UUID;

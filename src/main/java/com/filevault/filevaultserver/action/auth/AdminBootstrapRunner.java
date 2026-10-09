@@ -2,8 +2,8 @@ package com.filevault.filevaultserver.action.auth;
 
 import com.filevault.filevaultserver.models.Role;
 import com.filevault.filevaultserver.models.User;
-import com.filevault.filevaultserver.repository.RoleRepository;
-import com.filevault.filevaultserver.repository.UserRepository;
+import com.filevault.filevaultserver.repository.role.RoleRepository;
+import com.filevault.filevaultserver.repository.user.UserRepository;
 import com.filevault.filevaultserver.security.BootstrapProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

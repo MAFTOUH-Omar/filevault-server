@@ -1,8 +1,8 @@
 package com.filevault.filevaultserver.action.auth;
 
-import com.filevault.filevaultserver.exception.InvalidRefreshTokenException;
+import com.filevault.filevaultserver.exception.auth.InvalidRefreshTokenException;
 import com.filevault.filevaultserver.models.RefreshToken;
-import com.filevault.filevaultserver.repository.RefreshTokenRepository;
+import com.filevault.filevaultserver.repository.auth.RefreshTokenRepository;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 

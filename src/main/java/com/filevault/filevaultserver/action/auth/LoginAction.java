@@ -1,8 +1,8 @@
 package com.filevault.filevaultserver.action.auth;
 
-import com.filevault.filevaultserver.exception.InvalidCredentialsException;
+import com.filevault.filevaultserver.exception.auth.InvalidCredentialsException;
 import com.filevault.filevaultserver.models.User;
-import com.filevault.filevaultserver.repository.UserRepository;
+import com.filevault.filevaultserver.repository.user.UserRepository;
 import com.filevault.filevaultserver.request.auth.LoginRequest;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;

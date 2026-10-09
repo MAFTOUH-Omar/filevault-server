@@ -1,4 +1,4 @@
-package com.filevault.filevaultserver.exception;
+package com.filevault.filevaultserver.exception.role;
 
 /**
  * Thrown when the caller has the generic {@code roles:assign} authority but lacks the specific

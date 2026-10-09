@@ -37,7 +37,11 @@ On Windows use `mvnw.cmd` instead of `./mvnw` from `cmd.exe`/PowerShell if the w
   values are pulled from env vars with `${VAR:default}` placeholders, loaded from a local `.env` file
   (`spring.config.import: optional:file:.env[.properties]`) via `spring-boot-starter-liquibase`'s dotenv
   support. Required vars: `DB_USER`, `DB_PASSWORD`, `JWT_SECRET`, `LINK_SECRET`. Optional: `DB_URL`,
-  `MAX_FILE_SIZE`, `COOKIE_SECURE`, `CORS_ORIGINS`, `STORAGE_ROOT`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`.
+  `MAX_FILE_SIZE`, `COOKIE_SECURE`, `CORS_ORIGINS`, `STORAGE_ROOT`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`,
+  `REDIS_HOST` (default `localhost`), `REDIS_PORT` (default `6379`), `REDIS_PASSWORD` (default empty).
+- `app.rate-limit.global.{limit,window}` and `app.rate-limit.auth.{limit,window}` configure the two
+  Redis-backed rate limits (see "Rate limiting & abuse protection" below) — change these, not the
+  filter code, to retune thresholds.
 - `spring.jpa.hibernate.ddl-auto` is `validate` — Hibernate never modifies the schema. All schema
   changes must go through a new Liquibase changeset; do not rely on JPA auto-DDL.
 - `app.*` keys in `application.yaml` define JWT issuer/TTL, refresh-token cookie settings, signed-link
@@ -49,7 +53,7 @@ On Windows use `mvnw.cmd` instead of `./mvnw` from `cmd.exe`/PowerShell if the w
 - **Tables and columns**: every table has a short domain prefix, and every one of its own columns
   repeats that prefix (`usr_users` → `usr_id`, `usr_email`, `usr_password_hash`, ...). Current
   prefixes: `usr` (users), `rol` (roles), `prm` (permissions), `tok` (refresh tokens), `fil` (stored
-  files). A table's primary key is always `<its own prefix>_id`; a foreign key column reuses the
+  files), `sec` (security/abuse-prevention, e.g. `sec_blacklisted_ips`). A table's primary key is always `<its own prefix>_id`; a foreign key column reuses the
   *referenced* table's prefix (e.g. `fil_stored_files.usr_id` references `usr_users.usr_id`), so the
   same column name always means the same thing across tables. Pure join tables are named by
   concatenating both prefixes (`rol_prm` for role↔permission, `usr_rol` for user↔role) and hold only
@@ -79,6 +83,9 @@ editing it). Current schema (see naming convention above for the prefix scheme):
 - `fil_stored_files` — UUID PK, FK `usr_id` to the owning user, `fil_storage_key` is the unique
   on-disk/physical key (distinct from `fil_original_name`), indexed by `(usr_id, fil_created_at)` for
   listing.
+- `sec_blacklisted_ips` — bigint PK, unique `sec_ip_address` (varchar(45), fits IPv4 and IPv6),
+  optional `sec_reason`. Source of truth for `IpBlacklistFilter`; administer it directly (no CRUD
+  endpoint exists yet — add one under `roles:manage`-equivalent protection if/when needed).
 
 **Indexing rule**: every FK column must be queryable fast in both directions. Postgres only indexes
 the *leading* column of a composite PK/unique constraint for free, so:
@@ -116,15 +123,28 @@ separate):
   needs to reuse logic (token issuance, hashing), that shared piece is its own small
   package-private class in the same `action/<domain>/` package (`TokenIssuer`, `TokenHasher`), not a
   public service everything depends on.
-- `repository/` — Spring Data JPA repositories, flat. Each one is also where "find-or-404" lives as a
-  `default` interface method (`RoleRepository.getOrThrow(id)`, `UserRepository.getOrThrow(id)`) so
-  actions don't repeat the lookup-or-throw boilerplate.
-- `exception/` — flat, one class per domain error. No logic beyond a message.
-- `middleware/` — `GlobalExceptionHandler` (`@RestControllerAdvice`) + its `ErrorResponse` DTO: the
-  single place every thrown exception becomes an HTTP status + body.
+- `repository/<domain>/` — Spring Data JPA repositories, one subpackage per domain
+  (`repository/role/`, `repository/auth/`, `repository/user/`, `repository/security/`). Each one is
+  also where "find-or-404" lives as a `default` interface method (`RoleRepository.getOrThrow(id)`,
+  `UserRepository.getOrThrow(id)`) so actions don't repeat the lookup-or-throw boilerplate.
+- `exception/<domain>/` — one subpackage per domain (`exception/role/`, `exception/auth/`,
+  `exception/user/`), one class per domain error, no logic beyond a message. A cross-cutting concern
+  that isn't tied to one domain (there currently is none) would get its own `exception/<name>/`
+  rather than being forced into role/auth/user.
+- `middleware/` — two different mechanisms, both "turn something into an HTTP response":
+  `GlobalExceptionHandler` (`@RestControllerAdvice`) + its `ErrorResponse` DTO is the single place
+  every exception *thrown inside a controller* becomes an HTTP status + body. The perimeter filters
+  (`PathTraversalFilter`, `IpBlacklistFilter`, `GlobalRateLimitFilter`, `AuthRateLimitFilter`) are
+  plain servlet `Filter`s that run *before* DispatcherServlet, so they can't rely on
+  `@RestControllerAdvice` — they write the same `ErrorResponse` shape themselves via the shared
+  `ErrorResponseWriter`. See "Rate limiting & abuse protection" below.
 - `security/` — infrastructure that doesn't belong to any one domain: JWT encode/decode
-  (`JwtService`), `SecurityConfig`, `AuthorityMapper`, and a typed `@ConfigurationProperties` record
-  per `app.*` config block. Not part of the layering above on purpose — it's cross-cutting.
+  (`JwtService`), `SecurityConfig`, `AuthorityMapper`, `RedisRateLimiter`, and a typed
+  `@ConfigurationProperties` record per `app.*` config block. Not part of the layering above on
+  purpose — it's cross-cutting.
+- `config/` — `@Configuration` classes that only wire beans together, no business logic:
+  `FilterConfig` (registers the `middleware/` filters with explicit order/URL patterns) and
+  `OpenApiConfig` (API title + the `bearerAuth` security scheme).
 
 When adding a new use case: DTO(s) in `request`/`response`, the write/read logic as a new class in
 `action/<domain>/`, a policy check in `policy/` only if authorization needs more than
@@ -176,6 +196,17 @@ Self-registration (`RegisterAction`) always assigns the single configured defaul
 (`app.signup.default-role`) — there is no caller-supplied role on that path, so it isn't a
 privilege-escalation surface and doesn't go through `RolePolicy`.
 
+### User-facing identity: register/login/refresh/me all return the same shape
+`response/user/UserSummaryResponse` (id, email, fullName, roles, permissions — plain names, not JWT
+`ROLE_`-prefixed authorities) is built from a `User` entity via `UserSummaryResponse.from(user)`, using
+`AuthorityMapper.roleNames`/`permissionNames`. `AuthResponse` embeds one (`register`/`login`/`refresh`
+all return it, so the client always knows what the new token can do without decoding the JWT).
+`GET /auth/me` returns the same shape, freshly read from the DB (not from the JWT claims) — it's the
+one place that intentionally re-queries per request, since its entire purpose is "what does the DB say
+right now", unlike authorization checks which must stay token-only. `/auth/me` requires a valid access
+token (`SecurityConfig` only `permitAll`s `/auth/register`, `/auth/login`, `/auth/refresh`,
+`/auth/logout` — everything else, including `/auth/me`, needs `Authorization: Bearer <token>`).
+
 ### Roles and bootstrap
 `admin` and `full-access` both exist and are seeded with every management permission (including every
 `roles:give:*`); `admin` is the intended role for platform operators, `full-access` is intended as an
@@ -187,17 +218,85 @@ data unless a feature specifically wants to split them apart.
 email exists yet. This is the only way an admin account gets created from plain config — there is no
 seeded admin user/password in Liquibase (passwords need BCrypt hashing at runtime, not in SQL).
 
+## Rate limiting & abuse protection
+
+Four servlet filters run **before Spring Security**, registered explicitly (not as `@Component`s —
+see `config/FilterConfig`) in this order, cheapest/broadest rejection first:
+
+1. `PathTraversalFilter` — percent-decodes the URI and query string (up to 3 passes, to also catch
+   double/triple-encoded and mixed-encoding payloads like `..%2f` or `%252e%252e%252f`) and rejects
+   any result containing `../`, `..\`, or a null byte. Stateless, no DB/Redis. Note: a *literal*
+   `../` in the raw URI path never reaches this filter in practice — Tomcat normalizes it away before
+   dispatch — so this filter's real job is the encoded variants that normalization doesn't touch.
+2. `IpBlacklistFilter` — 403s any request whose `remoteAddr` exists in `sec_blacklisted_ips`. **DB,
+   not Redis**, by design: it's small, changes rarely, and is administered data that should survive a
+   cache flush — a plain indexed lookup is fast enough and there's no need to introduce a
+   cache-invalidation problem for this. (Note: uses `request.getRemoteAddr()` directly, i.e. it does
+   *not* trust `X-Forwarded-For` — if this app ever sits behind a reverse proxy, that needs explicit
+   trusted-proxy configuration, otherwise the header is spoofable and this filter becomes bypassable.)
+3. `GlobalRateLimitFilter` — a broad per-IP budget (`app.rate-limit.global`, default 100/min) across
+   *all* routes, a coarse anti-DoS backstop.
+4. `AuthRateLimitFilter` — scoped (via its `FilterRegistrationBean` URL patterns) to only
+   `/auth/register` and `/auth/login`, with a tighter budget (`app.rate-limit.auth`, default 10/min
+   per IP *per endpoint*) to blunt credential-stuffing/spam-registration specifically. A caller must
+   pass both this and the global filter.
+
+Both rate-limit filters share `security/RedisRateLimiter`: a fixed-window counter (`INCR` the key, set
+its TTL only the first time it's created). This is simple and cheap, at the cost of allowing a short
+burst right at a window boundary compared to a sliding window/token bucket — an accepted trade-off for
+abuse protection, not precise metering. If that boundary burst ever becomes a real problem, replace the
+counter logic in `RedisRateLimiter`, not the filters that call it.
+
+All four filters write `middleware.ErrorResponse` JSON directly via `middleware/ErrorResponseWriter`
+(a shared `ObjectMapper`-backed helper) instead of throwing — a `Filter` runs outside
+`DispatcherServlet`, so an exception thrown here would **not** be caught by `GlobalExceptionHandler`.
+Keep that pattern for any new perimeter filter.
+
 ## API documentation (OpenAPI / Scalar)
 
 `springdoc-openapi-starter-webmvc-scalar` (pom.xml, pinned via `springdoc-openapi.version`) generates
-the OpenAPI 3 spec from controllers automatically and serves it through Scalar's UI — no hand-written
-API docs or Swagger annotations required for a controller to show up. Once controllers exist:
+the OpenAPI 3 spec from controllers automatically and serves it through Scalar's UI — a controller
+doesn't need any annotation to *appear* in the docs. Once controllers exist:
 - Raw OpenAPI JSON: `GET /v3/api-docs`
 - Scalar UI (browsable reference): `GET /scalar`
 Config lives in `application.yaml` under `springdoc.*`/`scalar.*`. Swagger UI itself is intentionally
 not on the classpath — Scalar is the only UI, reading the same generated spec, so there is nothing to
-keep in sync by hand. Add `@Operation`/`@Schema` annotations only to enrich descriptions; they are
-never required for an endpoint to appear.
+keep in sync by hand.
+
+That said, appearing isn't the same as being *documented*, and both of the following are required —
+not optional polish — for every controller/endpoint in this project:
+
+- **`@Tag(name = "...")` on every controller.** Without it, springdoc derives the sidebar group name
+  from the Java class name (`role-controller`, `auth-controller`), which is an implementation detail
+  leaking into client-facing docs. Use a clean, plural, capitalized noun (`"Roles"`, `"Auth"`) instead
+  — see `RoleController`/`AuthController` for the pattern.
+- **`@ApiResponses` listing every status code the endpoint can actually return, including error
+  cases** — not just the 200/201/204 happy path. At minimum: validation failures (400), auth failures
+  (401/403, naming the specific permission/policy involved), not-found (404), conflicts (409), and
+  rate limiting (429, already declared once per controller via a class-level `@ApiResponses` — only
+  add endpoint-specific codes at the method level). Reference `middleware.ErrorResponse` via
+  `@Content(schema = @Schema(implementation = ErrorResponse.class))` for every non-2xx response so
+  Scalar shows the actual error body shape, not just a bare status code. `@SecurityRequirement(name =
+  "bearerAuth")` (scheme defined once in `config/OpenApiConfig`) goes on every endpoint that requires
+  a token, so Scalar's "Authorize" flow applies to it.
+
+When adding a new endpoint, write the `@ApiResponses` block by asking "what can `GlobalExceptionHandler`
+or a `RolePolicy`/filter actually turn this into" — don't just document the success case and call it done.
+
+### Responses are always in English
+
+Every HTTP response — success bodies, `ErrorResponse` messages, Bean Validation messages — is in
+English, regardless of the client's `Accept-Language` header. This is enforced by
+`spring.mvc.locale: en` + `spring.mvc.locale-resolver: fixed` in `application.yaml` (a `FixedLocaleResolver`
+ignores `Accept-Language` entirely, which also fixes Bean Validation's default messages, since those are
+resolved via `LocaleContextHolder`). Consequences for anyone adding code:
+- Never write a French (or any non-English) string into an exception message, `prm_description` seed
+  value, `@Operation`/`@ApiResponse` description, or any other client-visible text — including inside
+  a *new* Liquibase migration. If an existing migration's text needs correcting, add a new migration
+  with `UPDATE` statements (see `2026_10_09_130000_translate_permission_descriptions_to_english.yaml`
+  for the pattern) rather than editing the already-applied one in place.
+- Comments in code/YAML, commit messages, and this file are not "responses" and may stay in whatever
+  language — this rule is about what a client of the API receives.
 
 ## Skills to use automatically in this repo
 

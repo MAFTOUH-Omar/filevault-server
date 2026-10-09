@@ -1,6 +1,6 @@
-package com.filevault.filevaultserver.repository;
+package com.filevault.filevaultserver.repository.role;
 
-import com.filevault.filevaultserver.exception.RoleNotFoundException;
+import com.filevault.filevaultserver.exception.role.RoleNotFoundException;
 import com.filevault.filevaultserver.models.Role;
 import java.util.List;
 import java.util.Optional;

@@ -1,4 +1,4 @@
-package com.filevault.filevaultserver.exception;
+package com.filevault.filevaultserver.exception.user;
 
 import java.util.UUID;
 

@@ -1,12 +1,12 @@
 package com.filevault.filevaultserver.middleware;
 
-import com.filevault.filevaultserver.exception.EmailAlreadyUsedException;
-import com.filevault.filevaultserver.exception.ForbiddenRoleGrantException;
-import com.filevault.filevaultserver.exception.InvalidCredentialsException;
-import com.filevault.filevaultserver.exception.InvalidRefreshTokenException;
-import com.filevault.filevaultserver.exception.RoleAlreadyExistsException;
-import com.filevault.filevaultserver.exception.RoleNotFoundException;
-import com.filevault.filevaultserver.exception.UserNotFoundException;
+import com.filevault.filevaultserver.exception.auth.EmailAlreadyUsedException;
+import com.filevault.filevaultserver.exception.role.ForbiddenRoleGrantException;
+import com.filevault.filevaultserver.exception.auth.InvalidCredentialsException;
+import com.filevault.filevaultserver.exception.auth.InvalidRefreshTokenException;
+import com.filevault.filevaultserver.exception.role.RoleAlreadyExistsException;
+import com.filevault.filevaultserver.exception.role.RoleNotFoundException;
+import com.filevault.filevaultserver.exception.user.UserNotFoundException;
 import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;

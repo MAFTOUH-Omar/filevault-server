@@ -1,9 +1,9 @@
 package com.filevault.filevaultserver.action.role;
 
-import com.filevault.filevaultserver.exception.RoleAlreadyExistsException;
+import com.filevault.filevaultserver.exception.role.RoleAlreadyExistsException;
 import com.filevault.filevaultserver.models.Role;
-import com.filevault.filevaultserver.repository.PermissionRepository;
-import com.filevault.filevaultserver.repository.RoleRepository;
+import com.filevault.filevaultserver.repository.role.PermissionRepository;
+import com.filevault.filevaultserver.repository.role.RoleRepository;
 import com.filevault.filevaultserver.request.role.UpdateRoleRequest;
 import com.filevault.filevaultserver.response.role.RoleResponse;
 import org.springframework.stereotype.Component;
@@ -40,8 +40,9 @@ public class UpdateRoleAction {
     }
 
     private void renameDynamicPermission(String previousRoleName, String newRoleName) {
-        permissionRepository
-                .findByPrmName("roles:give:" + previousRoleName)
-                .ifPresent(permission -> permission.setPrmName("roles:give:" + newRoleName));
+        permissionRepository.findByPrmName("roles:give:" + previousRoleName).ifPresent(permission -> {
+            permission.setPrmName("roles:give:" + newRoleName);
+            permission.setPrmDescription("Can grant the role " + newRoleName);
+        });
     }
 }

@@ -1,4 +1,4 @@
-package com.filevault.filevaultserver.repository;
+package com.filevault.filevaultserver.repository.role;
 
 import com.filevault.filevaultserver.models.Permission;
 import java.util.Optional;

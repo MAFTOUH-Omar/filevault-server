@@ -1,0 +1,27 @@
+databaseChangeLog:
+  - changeSet:
+      id: 2026_10_09_130000_translate_permission_descriptions_to_english
+      author: filevault
+      comment: >
+        All API-facing text must be English (see CLAUDE.md). The earlier seed migrations wrote
+        French prm_description values; this updates them in place rather than editing the
+        already-applied changesets (which would break their checksums).
+      changes:
+        - sql:
+            sql: |
+              UPDATE prm_permissions SET prm_description = 'View and download own files' WHERE prm_name = 'files:read';
+              UPDATE prm_permissions SET prm_description = 'Upload files' WHERE prm_name = 'files:upload';
+              UPDATE prm_permissions SET prm_description = 'Delete own files' WHERE prm_name = 'files:delete';
+              UPDATE prm_permissions SET prm_description = 'Read and delete any user''s files' WHERE prm_name = 'files:manage-all';
+              UPDATE prm_permissions SET prm_description = 'List user accounts' WHERE prm_name = 'users:read';
+              UPDATE prm_permissions SET prm_description = 'Modify user roles and account status' WHERE prm_name = 'users:manage';
+              UPDATE prm_permissions SET prm_description = 'Create and modify roles and their permissions' WHERE prm_name = 'roles:manage';
+              UPDATE prm_permissions SET prm_description = 'Create a role' WHERE prm_name = 'roles:create';
+              UPDATE prm_permissions SET prm_description = 'List and view roles' WHERE prm_name = 'roles:read';
+              UPDATE prm_permissions SET prm_description = 'Update a role (name, quota, permissions)' WHERE prm_name = 'roles:update';
+              UPDATE prm_permissions SET prm_description = 'Delete a role' WHERE prm_name = 'roles:delete';
+              UPDATE prm_permissions SET prm_description = 'Grant or revoke a role for a user' WHERE prm_name = 'roles:assign';
+              UPDATE prm_permissions
+                SET prm_description = 'Can grant the role ' || substring(prm_name from 12)
+                WHERE prm_name LIKE 'roles:give:%';
+      rollback: []

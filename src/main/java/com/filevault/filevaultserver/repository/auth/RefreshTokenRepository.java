@@ -1,4 +1,4 @@
-package com.filevault.filevaultserver.repository;
+package com.filevault.filevaultserver.repository.auth;
 
 import com.filevault.filevaultserver.models.RefreshToken;
 import java.util.Optional;

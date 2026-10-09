@@ -1,4 +1,4 @@
-package com.filevault.filevaultserver.exception;
+package com.filevault.filevaultserver.exception.auth;
 
 public class InvalidRefreshTokenException extends RuntimeException {
 

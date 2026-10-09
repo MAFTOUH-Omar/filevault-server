@@ -1,6 +1,6 @@
 package com.filevault.filevaultserver.policy;
 
-import com.filevault.filevaultserver.exception.ForbiddenRoleGrantException;
+import com.filevault.filevaultserver.exception.role.ForbiddenRoleGrantException;
 import com.filevault.filevaultserver.models.Role;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;

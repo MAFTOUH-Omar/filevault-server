@@ -2,10 +2,11 @@ package com.filevault.filevaultserver.action.auth;
 
 import com.filevault.filevaultserver.models.RefreshToken;
 import com.filevault.filevaultserver.models.User;
-import com.filevault.filevaultserver.repository.RefreshTokenRepository;
+import com.filevault.filevaultserver.repository.auth.RefreshTokenRepository;
 import com.filevault.filevaultserver.security.JwtProperties;
 import com.filevault.filevaultserver.security.JwtService;
 import com.filevault.filevaultserver.security.RefreshTokenProperties;
+import com.filevault.filevaultserver.response.user.UserSummaryResponse;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Base64;
@@ -37,7 +38,8 @@ class TokenIssuer {
         RefreshToken refreshToken = new RefreshToken(
                 user, TokenHasher.sha256Hex(rawRefreshToken), Instant.now().plus(refreshTokenProperties.ttl()));
         refreshTokenRepository.save(refreshToken);
-        return new AuthResult(accessToken, jwtProperties.accessTokenTtl().toSeconds(), rawRefreshToken);
+        return new AuthResult(
+                accessToken, jwtProperties.accessTokenTtl().toSeconds(), rawRefreshToken, UserSummaryResponse.from(user));
     }
 
     private String generateOpaqueToken() {

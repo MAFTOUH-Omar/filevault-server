@@ -1,4 +1,6 @@
 package com.filevault.filevaultserver.action.auth;
 
-public record AuthResult(String accessToken, long accessTokenTtlSeconds, String rawRefreshToken) {
+import com.filevault.filevaultserver.response.user.UserSummaryResponse;
+
+public record AuthResult(String accessToken, long accessTokenTtlSeconds, String rawRefreshToken, UserSummaryResponse user) {
 }
