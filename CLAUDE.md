@@ -5,9 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project
 
 Spring Boot 4.1.1 / Java 27 backend for FileVault, a file storage service with JWT auth, role-based
-permissions, and per-user storage quotas. PostgreSQL + Liquibase for schema management. The codebase
-is a freshly scaffolded skeleton: only the Liquibase schema exists so far — no entities, controllers,
-services, or security config have been written yet.
+permissions, and per-user storage quotas. PostgreSQL + Liquibase for schema management. Auth
+(register/login/refresh/logout) and role/permission management (CRUD + assigning roles to users) are
+implemented; file upload/storage endpoints are not yet.
 
 ## Commands
 
@@ -95,6 +95,43 @@ the *leading* column of a composite PK/unique constraint for free, so:
 Seed data (`2026_10_02_100400_seed_roles_and_permissions.yaml`) defines the default roles: `member`
 (1 GiB quota, read/upload/delete own files), `premium` (10 GiB quota, same permissions), `full-access`
 (unlimited quota, all permissions). `app.signup.default-role` controls which role new signups get.
+
+## Auth & RBAC architecture
+
+Code is organized by feature, not by layer: `auth/` (register/login/refresh/logout, `RefreshToken`
+entity, `AdminBootstrapRunner`), `role/` (CRUD + assign, `Role` entity), `permission/` (`Permission`
+entity, catalog only — no controller, permissions are only ever granted to roles via seed migrations
+or future role-update endpoints), `user/` (`User` entity), `security/` (JWT encode/decode, Spring
+Security config, typed `@ConfigurationProperties` records for every `app.*` config block).
+
+- **Stateless JWT, self-issued**: the app is its own OAuth2 resource server. `SecurityConfig` builds
+  a `JwtEncoder`/`JwtDecoder` from the same HMAC secret (`app.jwt.secret`, HS256) — there's no
+  external IdP. A user's roles and permissions are flattened into the access token's `authorities`
+  claim at login/register/refresh time (see `AuthorityMapper`: `ROLE_<NAME>` per role +
+  the permission name per permission), so **authorization never re-queries the DB per request** —
+  `JwtAuthenticationConverter` reads authorities straight from the token. This means a role/permission
+  change only takes effect for a user's *next* token (next login or refresh) — there is no live
+  revocation of already-issued access tokens short of waiting out `app.jwt.access-token-ttl` (15m).
+- **Refresh tokens are opaque, not JWTs**, stored hashed (SHA-256) in `tok_refresh_tokens`, delivered
+  only via an `HttpOnly` cookie (`app.refresh-token.cookie-name`, scoped to `/auth`). `/auth/refresh`
+  rotates them (old one revoked, new one issued) rather than reusing the same token.
+- **Permission names are the actual Spring Security authorities** (e.g. `roles:create`), checked via
+  `@PreAuthorize("hasAuthority('roles:create')")` on controller methods — not `hasRole(...)`, since
+  the granular `roles:*`/`users:*`/`files:*` permissions (seeded in
+  `db/changelog/migrations/2026_10_02_100400_seed_roles_and_permissions.yaml` and
+  `2026_10_09_090000_seed_role_management_permissions.yaml`) are the unit of authorization, not role
+  names. `ROLE_<NAME>` authorities exist too (for any future `hasRole(...)` use) but nothing currently
+  checks them.
+- **`admin` vs `full-access` roles**: both exist and are seeded with every management permission;
+  `admin` is the intended role for platform operators, `full-access` is intended as an unlimited-quota
+  storage tier for end users. Keep granting new management permissions to both in seed data unless a
+  feature specifically wants to split them apart.
+- **Bootstrap admin**: `AdminBootstrapRunner` (an `ApplicationRunner`) creates one admin user from
+  `app.bootstrap.admin-email`/`admin-password` on startup if neither is blank and no user with that
+  email exists yet. This is the only way an admin account gets created from plain config — there is
+  no seeded admin user/password in Liquibase (passwords need BCrypt hashing at runtime, not in SQL).
+- **DTOs only at the boundary**: controllers never accept or return entities directly (`role/dto/`,
+  `auth/dto/`) per the project's Spring Boot conventions skill.
 
 ## API documentation (OpenAPI / Scalar)
 
