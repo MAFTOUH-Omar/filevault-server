@@ -1,0 +1,55 @@
+databaseChangeLog:
+  - changeSet:
+      id: 2026_10_02_100200_create_refresh_tokens
+      author: filevault
+      changes:
+        - createTable:
+            tableName: tok_refresh_tokens
+            columns:
+              - column:
+                  name: tok_id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: pk_tok_refresh_tokens
+              - column:
+                  name: usr_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: fk_tok_refresh_tokens_user
+                    references: usr_users(usr_id)
+                    deleteCascade: true
+              - column:
+                  name: tok_token_hash
+                  type: varchar(64)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uk_tok_refresh_tokens_hash
+              - column:
+                  name: tok_expires_at
+                  type: TIMESTAMP WITH TIME ZONE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: tok_revoked_at
+                  type: TIMESTAMP WITH TIME ZONE
+              - column:
+                  name: tok_created_at
+                  type: TIMESTAMP WITH TIME ZONE
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - createIndex:
+            tableName: tok_refresh_tokens
+            indexName: idx_tok_refresh_tokens_usr_id
+            columns:
+              - column:
+                  name: usr_id
+        - createIndex:
+            tableName: tok_refresh_tokens
+            indexName: idx_tok_refresh_tokens_expires_at
+            columns:
+              - column:
+                  name: tok_expires_at

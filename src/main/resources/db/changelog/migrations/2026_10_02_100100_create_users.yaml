@@ -1,0 +1,78 @@
+databaseChangeLog:
+  - changeSet:
+      id: 2026_10_02_100100_create_users
+      author: filevault
+      changes:
+        - createTable:
+            tableName: usr_users
+            columns:
+              - column:
+                  name: usr_id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: pk_usr_users
+              - column:
+                  name: usr_email
+                  type: varchar(255)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uk_usr_users_email
+              - column:
+                  name: usr_password_hash
+                  type: varchar(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: usr_full_name
+                  type: varchar(120)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: usr_enabled
+                  type: boolean
+                  defaultValueBoolean: true
+                  constraints:
+                    nullable: false
+              - column:
+                  name: usr_storage_used_bytes
+                  type: bigint
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: usr_created_at
+                  type: TIMESTAMP WITH TIME ZONE
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - createTable:
+            tableName: usr_rol
+            columns:
+              - column:
+                  name: usr_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+                    primaryKeyName: pk_usr_rol
+                    foreignKeyName: fk_usr_rol_user
+                    references: usr_users(usr_id)
+                    deleteCascade: true
+              - column:
+                  name: rol_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+                    primaryKeyName: pk_usr_rol
+                    foreignKeyName: fk_usr_rol_role
+                    references: rol_roles(rol_id)
+                    deleteCascade: true
+        - createIndex:
+            tableName: usr_rol
+            indexName: idx_usr_rol_rol_id
+            columns:
+              - column:
+                  name: rol_id

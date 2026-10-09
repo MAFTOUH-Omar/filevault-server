@@ -1,0 +1,36 @@
+databaseChangeLog:
+  - changeSet:
+      id: 2026_10_02_100400_seed_roles_and_permissions
+      author: filevault
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO prm_permissions (prm_name, prm_description) VALUES
+                ('files:read',       'Voir et télécharger ses propres fichiers'),
+                ('files:upload',     'Uploader des fichiers'),
+                ('files:delete',     'Supprimer ses propres fichiers'),
+                ('files:manage-all', 'Lire et supprimer les fichiers de tout le monde'),
+                ('users:read',       'Lister les comptes'),
+                ('users:manage',     'Modifier les rôles et le statut des comptes'),
+                ('roles:manage',     'Créer et modifier les rôles et leurs permissions');
+
+              -- un rôle = un paquet de permissions + un quota (NULL = illimité)
+              INSERT INTO rol_roles (rol_name, rol_storage_quota_bytes) VALUES
+                ('member',      1073741824),
+                ('premium',     10737418240),
+                ('full-access', NULL);
+
+              INSERT INTO rol_prm (rol_id, prm_id)
+                SELECT r.rol_id, p.prm_id FROM rol_roles r
+                JOIN prm_permissions p ON p.prm_name IN ('files:read', 'files:upload', 'files:delete')
+                WHERE r.rol_name IN ('member', 'premium');
+
+              INSERT INTO rol_prm (rol_id, prm_id)
+                SELECT r.rol_id, p.prm_id FROM rol_roles r CROSS JOIN prm_permissions p
+                WHERE r.rol_name = 'full-access';
+      rollback:
+        - sql:
+            sql: |
+              DELETE FROM rol_prm;
+              DELETE FROM rol_roles WHERE rol_name IN ('member', 'premium', 'full-access');
+              DELETE FROM prm_permissions;

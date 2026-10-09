@@ -1,0 +1,74 @@
+databaseChangeLog:
+  - changeSet:
+      id: 2026_10_02_100000_create_roles_and_permissions
+      author: filevault
+      changes:
+        - createTable:
+            tableName: rol_roles
+            columns:
+              - column:
+                  name: rol_id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: pk_rol_roles
+              - column:
+                  name: rol_name
+                  type: varchar(50)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uk_rol_roles_name
+              - column:
+                  name: rol_storage_quota_bytes
+                  type: bigint      # null = illimité
+        - createTable:
+            tableName: prm_permissions
+            columns:
+              - column:
+                  name: prm_id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: pk_prm_permissions
+              - column:
+                  name: prm_name
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uk_prm_permissions_name
+              - column:
+                  name: prm_description
+                  type: varchar(255)
+        - createTable:
+            tableName: rol_prm
+            columns:
+              - column:
+                  name: rol_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+                    primaryKeyName: pk_rol_prm
+                    foreignKeyName: fk_rol_prm_role
+                    references: rol_roles(rol_id)
+                    deleteCascade: true
+              - column:
+                  name: prm_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+                    primaryKeyName: pk_rol_prm
+                    foreignKeyName: fk_rol_prm_permission
+                    references: prm_permissions(prm_id)
+                    deleteCascade: true
+        - createIndex:
+            tableName: rol_prm
+            indexName: idx_rol_prm_prm_id
+            columns:
+              - column:
+                  name: prm_id

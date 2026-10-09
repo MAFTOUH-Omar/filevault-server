@@ -1,0 +1,58 @@
+databaseChangeLog:
+  - changeSet:
+      id: 2026_10_02_100300_create_stored_files
+      author: filevault
+      changes:
+        - createTable:
+            tableName: fil_stored_files
+            columns:
+              - column:
+                  name: fil_id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: pk_fil_stored_files
+              - column:
+                  name: usr_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: fk_fil_stored_files_owner
+                    references: usr_users(usr_id)
+                    deleteCascade: true
+              - column:
+                  name: fil_original_name
+                  type: varchar(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: fil_storage_key
+                  type: varchar(255)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uk_fil_stored_files_storage_key
+              - column:
+                  name: fil_content_type
+                  type: varchar(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: fil_size_bytes
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  name: fil_created_at
+                  type: TIMESTAMP WITH TIME ZONE
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - createIndex:
+            tableName: fil_stored_files
+            indexName: idx_fil_stored_files_usr_id_created
+            columns:
+              - column:
+                  name: usr_id
+              - column:
+                  name: fil_created_at
