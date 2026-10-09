@@ -96,20 +96,37 @@ Seed data (`2026_10_02_100400_seed_roles_and_permissions.yaml`) defines the defa
 (1 GiB quota, read/upload/delete own files), `premium` (10 GiB quota, same permissions), `full-access`
 (unlimited quota, all permissions). `app.signup.default-role` controls which role new signups get.
 
+## API documentation (OpenAPI / Scalar)
+
+`springdoc-openapi-starter-webmvc-scalar` (pom.xml, pinned via `springdoc-openapi.version`) generates
+the OpenAPI 3 spec from controllers automatically and serves it through Scalar's UI — no hand-written
+API docs or Swagger annotations required for a controller to show up. Once controllers exist:
+- Raw OpenAPI JSON: `GET /v3/api-docs`
+- Scalar UI (browsable reference): `GET /scalar`
+Config lives in `application.yaml` under `springdoc.*`/`scalar.*`. Swagger UI itself is intentionally
+not on the classpath — Scalar is the only UI, reading the same generated spec, so there is nothing to
+keep in sync by hand. Add `@Operation`/`@Schema` annotations only to enrich descriptions; they are
+never required for an endpoint to appear.
+
 ## Skills to use automatically in this repo
 
-The following skills are installed (via `npx skills`) and apply to this project. Trigger them
-proactively based on what the work actually touches — do not wait for the user to name a skill or
-ask for it explicitly:
+These skills are vendored **inside the repo** at `.claude/skills/<name>/SKILL.md` (committed, real
+files — not symlinks, so they work on a fresh clone regardless of OS/symlink support) via
+`npx skills add <pkg> -a claude-code --copy`. Anyone who clones the repo already has them; Claude
+Code should trigger them proactively based on what the work actually touches — do not wait for the
+user to name a skill or ask for it explicitly:
 
-- `github/awesome-copilot@java-springboot` — Spring Boot conventions/best practices. Use whenever
-  writing or reviewing Java/Spring code in `src/main/java` (controllers, services, config, security).
-- `github/awesome-copilot@postgresql-optimization` — PostgreSQL indexing/query/schema best practices.
-  Use whenever touching anything under `src/main/resources/db/changelog/` or writing JPA
+- `java-springboot` (from `github/awesome-copilot`) — Spring Boot conventions/best practices. Use
+  whenever writing or reviewing Java/Spring code in `src/main/java` (controllers, services, config,
+  security).
+- `postgresql-optimization` (from `github/awesome-copilot`) — PostgreSQL indexing/query/schema best
+  practices. Use whenever touching anything under `src/main/resources/db/changelog/` or writing JPA
   queries/repositories.
 
 If a task clearly falls in one of these domains, load the matching skill as part of normal work,
-the same way an explicit `/skill-name` invocation would, rather than only using it when asked.
+the same way an explicit `/skill-name` invocation would, rather than only using it when asked. When
+adding another project-wide skill, install it the same way (`-a claude-code --copy`) so it stays
+committed and OS-portable, then add it to this list.
 
 ## Security note
 

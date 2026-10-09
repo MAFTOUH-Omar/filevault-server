@@ -39,6 +39,15 @@ management:
       exposure:
         include: health,info
 
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+
+scalar:
+  enabled: true
+  path: /scalar
+  url: /v3/api-docs
+
 app:
   jwt:
     issuer: filevault
