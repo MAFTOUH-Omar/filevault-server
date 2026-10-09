@@ -16,6 +16,11 @@ spring:
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
 
+  cache:
+    type: redis
+    redis:
+      time-to-live: 5m   # safety-net TTL; mutations also explicitly evict (see UserSummaryCacheEvictor)
+
   mvc:
     # Responses (including Bean Validation messages) are always in English, regardless of the
     # client's Accept-Language header.

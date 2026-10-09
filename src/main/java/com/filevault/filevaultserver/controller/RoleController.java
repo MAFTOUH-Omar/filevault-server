@@ -12,9 +12,11 @@ import com.filevault.filevaultserver.middleware.ErrorResponse;
 import com.filevault.filevaultserver.request.role.AssignRoleRequest;
 import com.filevault.filevaultserver.request.role.CreateRoleRequest;
 import com.filevault.filevaultserver.request.role.UpdateRoleRequest;
+import com.filevault.filevaultserver.response.PageResponse;
 import com.filevault.filevaultserver.response.role.PermissionResponse;
 import com.filevault.filevaultserver.response.role.RoleResponse;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -34,6 +36,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -104,7 +107,11 @@ public class RoleController {
 
     @GetMapping
     @PreAuthorize("hasAuthority('roles:read')")
-    @Operation(summary = "List all roles")
+    @Operation(
+            summary = "List roles, with optional search and pagination",
+            description = "'search' matches role names containing the given text (case-insensitive); "
+                    + "'%' and '_' in it are treated as literal characters, not SQL wildcards. "
+                    + "'size' is capped at 100.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Roles listed"),
         @ApiResponse(
@@ -112,8 +119,12 @@ public class RoleController {
                 description = "Caller lacks the 'roles:read' permission",
                 content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
-    public List<RoleResponse> list() {
-        return listRolesAction.execute();
+    public PageResponse<RoleResponse> list(
+            @Parameter(description = "Case-insensitive substring match on role name") @RequestParam(required = false)
+                    String search,
+            @Parameter(description = "Zero-based page index") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size, capped at 100") @RequestParam(defaultValue = "20") int size) {
+        return listRolesAction.execute(search, page, size);
     }
 
     @GetMapping("/{id}")
@@ -180,7 +191,11 @@ public class RoleController {
 
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('roles:delete')")
-    @Operation(summary = "Delete a role")
+    @Operation(
+            summary = "Delete a role",
+            description = "Refused if any user still has this role, unless force=true — in which case those "
+                    + "users are moved onto an 'archive-<name>' role (created if needed) before deletion, so "
+                    + "there's always a record that they used to have it.")
     @ApiResponses({
         @ApiResponse(responseCode = "204", description = "Role deleted"),
         @ApiResponse(
@@ -190,10 +205,18 @@ public class RoleController {
         @ApiResponse(
                 responseCode = "404",
                 description = "No role with this id",
+                content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(
+                responseCode = "409",
+                description = "Role still has users assigned and force was not set",
                 content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
-    public ResponseEntity<Void> delete(@PathVariable("id") Long id) {
-        deleteRoleAction.execute(id);
+    public ResponseEntity<Void> delete(
+            @PathVariable("id") Long id,
+            @Parameter(description = "Archive-and-transfer affected users instead of refusing")
+                    @RequestParam(defaultValue = "false")
+                    boolean force) {
+        deleteRoleAction.execute(id, force);
         return ResponseEntity.noContent().build();
     }
 

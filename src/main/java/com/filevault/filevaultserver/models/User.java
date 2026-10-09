@@ -67,8 +67,16 @@ public class User {
         return usrEmail;
     }
 
+    public void setUsrEmail(String usrEmail) {
+        this.usrEmail = usrEmail;
+    }
+
     public String getUsrPasswordHash() {
         return usrPasswordHash;
+    }
+
+    public void setUsrPasswordHash(String usrPasswordHash) {
+        this.usrPasswordHash = usrPasswordHash;
     }
 
     public String getUsrFullName() {

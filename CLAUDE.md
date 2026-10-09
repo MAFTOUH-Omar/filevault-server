@@ -201,11 +201,77 @@ privilege-escalation surface and doesn't go through `RolePolicy`.
 `ROLE_`-prefixed authorities) is built from a `User` entity via `UserSummaryResponse.from(user)`, using
 `AuthorityMapper.roleNames`/`permissionNames`. `AuthResponse` embeds one (`register`/`login`/`refresh`
 all return it, so the client always knows what the new token can do without decoding the JWT).
-`GET /auth/me` returns the same shape, freshly read from the DB (not from the JWT claims) — it's the
-one place that intentionally re-queries per request, since its entire purpose is "what does the DB say
-right now", unlike authorization checks which must stay token-only. `/auth/me` requires a valid access
-token (`SecurityConfig` only `permitAll`s `/auth/register`, `/auth/login`, `/auth/refresh`,
-`/auth/logout` — everything else, including `/auth/me`, needs `Authorization: Bearer <token>`).
+`GET /auth/me` returns the same shape, read from the DB *or cache* (see "Caching" below) — it's the
+one place that intentionally looks past the JWT claims, since its whole purpose is "what does the
+system say right now", unlike authorization checks which must stay token-only. `/auth/me` (and its
+`/auth/me/email`, `/auth/me/password` siblings) requires a valid access token (`SecurityConfig` only
+`permitAll`s `/auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout` — everything else needs
+`Authorization: Bearer <token>`).
+
+### Self-service profile changes: confirm with password, 3/day
+`PUT /auth/me/email` and `PUT /auth/me/password` (`ChangeEmailAction`/`ChangePasswordAction`) both
+require `currentPassword` in the body as confirmation — a stolen/leaked access token alone must not be
+enough to hijack the account by changing its login email or password — and are both capped at 3
+attempts per user per day via `RedisRateLimiter` (key `profile:email:<userId>` /
+`profile:password:<userId>`, independent budgets, not shared between the two). The rate-limit check
+runs **before** the password check and consumes budget even on a wrong password, which doubles as
+brute-force throttling on the confirmation step itself (only 3 guesses/day at the current password
+through this path). Changing the password also revokes every other active refresh token for that user
+(logs out all other sessions) — the standard justification for a password change is "this may have
+leaked," so other sessions should not be trusted to continue silently.
+
+### Caching: `/auth/me` reads through Redis
+`MeAction.execute` is `@Cacheable(cacheNames = "userSummary", key = "#userId")`, backed by Spring's
+Redis `CacheManager` (`spring.cache.type: redis`, 5-minute TTL as a safety net —
+`spring.cache.redis.time-to-live`). `UserSummaryResponse implements Serializable` because the default
+`RedisCacheManager` serializer is plain JDK serialization (no custom Jackson/Redis serializer is
+configured — keep it that way unless there's a concrete reason not to, it's one less moving part).
+
+Every mutation that can change what `/auth/me` returns for a given user must evict that user's entry
+via `security/UserSummaryCacheEvictor.evict(userId)` — a dedicated bean, **not** a method called via
+`this.` from inside another component, because `@CacheEvict` is a Spring AOP proxy and self-invocation
+silently bypasses it. Current call sites: `AssignRoleAction`, `UnassignRoleAction`, `DeleteRoleAction`'s
+archive-transfer (evicts every transferred user), `RoleProvisioner` (evicts every user of every role
+that gains a new `roles:give:<name>` permission when another role is created — this is the easy-to-miss
+one: creating role X can change what `roles:manage` holders are *entitled to*, even though their own
+roles didn't change), and `ChangeEmailAction`. Adding a new way for a user's roles/permissions/email to
+change? Evict there too, or rely on the 5-minute TTL to self-heal (acceptable only if a few minutes of
+staleness on `/auth/me` specifically is fine for that case — it never affects actual authorization,
+which is JWT-only and unrelated to this cache).
+
+### Deleting a role that still has users: refuse, or archive
+`DeleteRoleAction` looks up every user holding the role first. If there are any and the caller didn't
+pass `force=true`, it throws `RoleHasUsersException` (409) rather than silently stripping those users
+of whatever the role granted. With `force=true`, every affected user is moved onto an
+`archive-<original name>` role (created via the same `RoleProvisioner` as a normal role, including its
+own `roles:give:archive-<name>` permission — reused if a previous deletion already created it) before
+the original role and its `roles:give:<name>` permission are deleted. This keeps a permanent, queryable
+trace of "this user used to have X" instead of just losing the information.
+
+Two Hibernate pitfalls this flow ran into (fixed, but relevant if `RoleProvisioner`/`DeleteRoleAction`
+is touched again):
+- `Role.permissions` carries `cascade = {PERSIST, MERGE}`. Without it, adding a freshly-saved
+  `Permission` to another role's collection in the same transaction as other dirty entities could
+  throw `TransientPropertyValueException` ("unsaved transient instance") at commit-time flush, even
+  though the `Permission` row had already been explicitly `saveAndFlush`-ed moments earlier — Hibernate
+  7's flush ordering doesn't reliably treat an explicit mid-transaction flush as settling this later.
+- `DeleteRoleAction` deletes the role's own `roles:give:<name>` permission **and flushes** *before*
+  archiving, not after. Archiving (via `RoleProvisioner`) freshly loads `admin`/`full-access` with
+  their full `permissions` collections to grant the new archive permission; if the old permission were
+  still in the DB (and thus loaded into those collections) at that point, Hibernate could silently fail
+  to delete it later in the same flush. Deleting it first means nothing in this transaction ever loads
+  a reference to it. If you reorder this again, re-run the force-delete-with-users scenario end-to-end
+  against a real DB (not just compile) — this class of bug doesn't show up in types or in a context
+  test, only in actual flush behavior with multiple dirty entities in one transaction.
+
+### Searching/paginating roles: escape before you LIKE
+`GET /api/roles?search=&page=&size=` is backed by `RoleRepository.searchByName` (a `LIKE ... ESCAPE
+'\'` query, `Page<Role>`/`Pageable`) and `ListRolesAction`, which wraps results in the generic
+`response/PageResponse<T>`. The raw user search string is **never** passed to the query directly —
+`ListRolesAction.escapeLike` backslash-escapes `\`, `%`, and `_` first (backslash first, or an input
+already containing `\%` would be double-unescaped by the `ESCAPE` clause), so a search for a literal
+`%` or `_` matches that literal character instead of being interpreted as a SQL wildcard. `size` is
+clamped to 100 server-side regardless of what's requested, to keep one query bounded.
 
 ### Roles and bootstrap
 `admin` and `full-access` both exist and are seeded with every management permission (including every

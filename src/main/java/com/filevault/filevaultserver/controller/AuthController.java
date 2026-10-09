@@ -1,12 +1,16 @@
 package com.filevault.filevaultserver.controller;
 
 import com.filevault.filevaultserver.action.auth.AuthResult;
+import com.filevault.filevaultserver.action.auth.ChangeEmailAction;
+import com.filevault.filevaultserver.action.auth.ChangePasswordAction;
 import com.filevault.filevaultserver.action.auth.LoginAction;
 import com.filevault.filevaultserver.action.auth.LogoutAction;
 import com.filevault.filevaultserver.action.auth.MeAction;
 import com.filevault.filevaultserver.action.auth.RefreshAction;
 import com.filevault.filevaultserver.action.auth.RegisterAction;
 import com.filevault.filevaultserver.middleware.ErrorResponse;
+import com.filevault.filevaultserver.request.auth.ChangeEmailRequest;
+import com.filevault.filevaultserver.request.auth.ChangePasswordRequest;
 import com.filevault.filevaultserver.request.auth.LoginRequest;
 import com.filevault.filevaultserver.request.auth.RegisterRequest;
 import com.filevault.filevaultserver.response.auth.AuthResponse;
@@ -30,6 +34,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -50,6 +55,8 @@ public class AuthController {
     private final RefreshAction refreshAction;
     private final LogoutAction logoutAction;
     private final MeAction meAction;
+    private final ChangeEmailAction changeEmailAction;
+    private final ChangePasswordAction changePasswordAction;
     private final RefreshTokenProperties refreshTokenProperties;
 
     public AuthController(
@@ -58,12 +65,16 @@ public class AuthController {
             RefreshAction refreshAction,
             LogoutAction logoutAction,
             MeAction meAction,
+            ChangeEmailAction changeEmailAction,
+            ChangePasswordAction changePasswordAction,
             RefreshTokenProperties refreshTokenProperties) {
         this.registerAction = registerAction;
         this.loginAction = loginAction;
         this.refreshAction = refreshAction;
         this.logoutAction = logoutAction;
         this.meAction = meAction;
+        this.changeEmailAction = changeEmailAction;
+        this.changePasswordAction = changePasswordAction;
         this.refreshTokenProperties = refreshTokenProperties;
     }
 
@@ -79,6 +90,54 @@ public class AuthController {
     })
     public UserSummaryResponse me(@AuthenticationPrincipal Jwt jwt) {
         return meAction.execute(UUID.fromString(jwt.getSubject()));
+    }
+
+    @PutMapping("/me/email")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(
+            summary = "Change the account email",
+            description = "Requires the current password as confirmation. Limited to 3 attempts per day.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Email changed"),
+        @ApiResponse(
+                responseCode = "400",
+                description = "Validation error",
+                content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(
+                responseCode = "401",
+                description = "Missing/invalid access token, or currentPassword is wrong",
+                content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(
+                responseCode = "409",
+                description = "Another account already uses this email",
+                content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    public UserSummaryResponse changeEmail(
+            @AuthenticationPrincipal Jwt jwt, @Valid @RequestBody ChangeEmailRequest request) {
+        return changeEmailAction.execute(UUID.fromString(jwt.getSubject()), request);
+    }
+
+    @PutMapping("/me/password")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(
+            summary = "Change the account password",
+            description = "Requires the current password as confirmation, and revokes every other active "
+                    + "refresh token (other sessions are logged out). Limited to 3 attempts per day.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "204", description = "Password changed"),
+        @ApiResponse(
+                responseCode = "400",
+                description = "Validation error",
+                content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(
+                responseCode = "401",
+                description = "Missing/invalid access token, or currentPassword is wrong",
+                content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    public ResponseEntity<Void> changePassword(
+            @AuthenticationPrincipal Jwt jwt, @Valid @RequestBody ChangePasswordRequest request) {
+        changePasswordAction.execute(UUID.fromString(jwt.getSubject()), request);
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/register")

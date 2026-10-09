@@ -1,10 +1,12 @@
 package com.filevault.filevaultserver.middleware;
 
 import com.filevault.filevaultserver.exception.auth.EmailAlreadyUsedException;
-import com.filevault.filevaultserver.exception.role.ForbiddenRoleGrantException;
 import com.filevault.filevaultserver.exception.auth.InvalidCredentialsException;
 import com.filevault.filevaultserver.exception.auth.InvalidRefreshTokenException;
+import com.filevault.filevaultserver.exception.auth.TooManyProfileChangesException;
+import com.filevault.filevaultserver.exception.role.ForbiddenRoleGrantException;
 import com.filevault.filevaultserver.exception.role.RoleAlreadyExistsException;
+import com.filevault.filevaultserver.exception.role.RoleHasUsersException;
 import com.filevault.filevaultserver.exception.role.RoleNotFoundException;
 import com.filevault.filevaultserver.exception.user.UserNotFoundException;
 import java.util.stream.Collectors;
@@ -36,6 +38,11 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse("ROLE_ALREADY_EXISTS", ex.getMessage()));
     }
 
+    @ExceptionHandler(RoleHasUsersException.class)
+    public ResponseEntity<ErrorResponse> handleRoleHasUsers(RoleHasUsersException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse("ROLE_HAS_USERS", ex.getMessage()));
+    }
+
     @ExceptionHandler({RoleNotFoundException.class, UserNotFoundException.class})
     public ResponseEntity<ErrorResponse> handleNotFound(RuntimeException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ErrorResponse("NOT_FOUND", ex.getMessage()));
@@ -49,6 +56,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ForbiddenRoleGrantException.class)
     public ResponseEntity<ErrorResponse> handleForbiddenRoleGrant(ForbiddenRoleGrantException ex) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ErrorResponse("FORBIDDEN", ex.getMessage()));
+    }
+
+    @ExceptionHandler(TooManyProfileChangesException.class)
+    public ResponseEntity<ErrorResponse> handleTooManyProfileChanges(TooManyProfileChangesException ex) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .body(new ErrorResponse("RATE_LIMIT_EXCEEDED", ex.getMessage()));
     }
 
     @ExceptionHandler(MissingRequestCookieException.class)

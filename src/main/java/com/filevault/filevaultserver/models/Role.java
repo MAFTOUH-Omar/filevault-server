@@ -1,5 +1,6 @@
 package com.filevault.filevaultserver.models;
 
+import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -28,7 +29,11 @@ public class Role {
     @Column(name = "rol_storage_quota_bytes")
     private Long rolStorageQuotaBytes;
 
-    @ManyToMany(fetch = FetchType.EAGER)
+    // PERSIST/MERGE (not REMOVE/DELETE - a Permission row is shared across roles and must outlive
+    // any single Role) so that adding a just-created Permission to another role's set in the same
+    // transaction (RoleProvisioner's "grant to every roles:manage holder" step) can never trip
+    // Hibernate's "unsaved transient instance" check, regardless of flush ordering.
+    @ManyToMany(fetch = FetchType.EAGER, cascade = {CascadeType.PERSIST, CascadeType.MERGE})
     @JoinTable(
             name = "rol_prm",
             joinColumns = @JoinColumn(name = "rol_id"),
