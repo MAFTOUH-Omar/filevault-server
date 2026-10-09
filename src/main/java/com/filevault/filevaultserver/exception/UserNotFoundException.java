@@ -1,0 +1,10 @@
+package com.filevault.filevaultserver.exception;
+
+import java.util.UUID;
+
+public class UserNotFoundException extends RuntimeException {
+
+    public UserNotFoundException(UUID usrId) {
+        super("User not found: " + usrId);
+    }
+}

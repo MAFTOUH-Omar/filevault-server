@@ -98,40 +98,94 @@ Seed data (`2026_10_02_100400_seed_roles_and_permissions.yaml`) defines the defa
 
 ## Auth & RBAC architecture
 
-Code is organized by feature, not by layer: `auth/` (register/login/refresh/logout, `RefreshToken`
-entity, `AdminBootstrapRunner`), `role/` (CRUD + assign, `Role` entity), `permission/` (`Permission`
-entity, catalog only — no controller, permissions are only ever granted to roles via seed migrations
-or future role-update endpoints), `user/` (`User` entity), `security/` (JWT encode/decode, Spring
-Security config, typed `@ConfigurationProperties` records for every `app.*` config block).
+Code is organized **by layer** (not by feature — this is a deliberate departure from the generic
+Spring Boot convention, to keep request/model/business-logic/authorization concerns visually
+separate):
 
-- **Stateless JWT, self-issued**: the app is its own OAuth2 resource server. `SecurityConfig` builds
-  a `JwtEncoder`/`JwtDecoder` from the same HMAC secret (`app.jwt.secret`, HS256) — there's no
-  external IdP. A user's roles and permissions are flattened into the access token's `authorities`
-  claim at login/register/refresh time (see `AuthorityMapper`: `ROLE_<NAME>` per role +
-  the permission name per permission), so **authorization never re-queries the DB per request** —
-  `JwtAuthenticationConverter` reads authorities straight from the token. This means a role/permission
-  change only takes effect for a user's *next* token (next login or refresh) — there is no live
-  revocation of already-issued access tokens short of waiting out `app.jwt.access-token-ttl` (15m).
-- **Refresh tokens are opaque, not JWTs**, stored hashed (SHA-256) in `tok_refresh_tokens`, delivered
-  only via an `HttpOnly` cookie (`app.refresh-token.cookie-name`, scoped to `/auth`). `/auth/refresh`
-  rotates them (old one revoked, new one issued) rather than reusing the same token.
-- **Permission names are the actual Spring Security authorities** (e.g. `roles:create`), checked via
-  `@PreAuthorize("hasAuthority('roles:create')")` on controller methods — not `hasRole(...)`, since
-  the granular `roles:*`/`users:*`/`files:*` permissions (seeded in
-  `db/changelog/migrations/2026_10_02_100400_seed_roles_and_permissions.yaml` and
-  `2026_10_09_090000_seed_role_management_permissions.yaml`) are the unit of authorization, not role
-  names. `ROLE_<NAME>` authorities exist too (for any future `hasRole(...)` use) but nothing currently
-  checks them.
-- **`admin` vs `full-access` roles**: both exist and are seeded with every management permission;
-  `admin` is the intended role for platform operators, `full-access` is intended as an unlimited-quota
-  storage tier for end users. Keep granting new management permissions to both in seed data unless a
-  feature specifically wants to split them apart.
-- **Bootstrap admin**: `AdminBootstrapRunner` (an `ApplicationRunner`) creates one admin user from
-  `app.bootstrap.admin-email`/`admin-password` on startup if neither is blank and no user with that
-  email exists yet. This is the only way an admin account gets created from plain config — there is
-  no seeded admin user/password in Liquibase (passwords need BCrypt hashing at runtime, not in SQL).
-- **DTOs only at the boundary**: controllers never accept or return entities directly (`role/dto/`,
-  `auth/dto/`) per the project's Spring Boot conventions skill.
+- `request/<domain>/` — input DTOs (`request/auth/RegisterRequest`, `request/role/CreateRoleRequest`, ...).
+- `response/<domain>/` — output DTOs. `RoleResponse.from(Role)` is a static factory the entity-facing
+  side builds itself; controllers never return entities directly.
+- `models/` — JPA entities (`User`, `Role`, `Permission`, `RefreshToken`), flat, no sub-packages.
+- `controller/` — `@RestController`s. Thin: validate via `@Valid`, delegate to one Action, map the
+  result to a `ResponseEntity`. No business logic here.
+- `policy/` — authorization decisions that don't fit a declarative `@PreAuthorize` string (currently
+  just `RolePolicy`, see below). A policy throws its own exception on denial; it doesn't return a
+  boolean for the caller to check.
+- `action/<domain>/` — one class per use case/write operation (`CreateRoleAction`, `LoginAction`, ...),
+  each with a single `execute(...)` method. This replaces a monolithic `*Service` — if a use case
+  needs to reuse logic (token issuance, hashing), that shared piece is its own small
+  package-private class in the same `action/<domain>/` package (`TokenIssuer`, `TokenHasher`), not a
+  public service everything depends on.
+- `repository/` — Spring Data JPA repositories, flat. Each one is also where "find-or-404" lives as a
+  `default` interface method (`RoleRepository.getOrThrow(id)`, `UserRepository.getOrThrow(id)`) so
+  actions don't repeat the lookup-or-throw boilerplate.
+- `exception/` — flat, one class per domain error. No logic beyond a message.
+- `middleware/` — `GlobalExceptionHandler` (`@RestControllerAdvice`) + its `ErrorResponse` DTO: the
+  single place every thrown exception becomes an HTTP status + body.
+- `security/` — infrastructure that doesn't belong to any one domain: JWT encode/decode
+  (`JwtService`), `SecurityConfig`, `AuthorityMapper`, and a typed `@ConfigurationProperties` record
+  per `app.*` config block. Not part of the layering above on purpose — it's cross-cutting.
+
+When adding a new use case: DTO(s) in `request`/`response`, the write/read logic as a new class in
+`action/<domain>/`, a policy check in `policy/` only if authorization needs more than
+`hasAuthority(...)`, wire it into the relevant `controller/`. Don't add a `*Service` facade over the
+actions — the controller calling 2–7 single-method Action beans directly is the intended shape here.
+
+### Stateless JWT, self-issued
+The app is its own OAuth2 resource server. `SecurityConfig` builds a `JwtEncoder`/`JwtDecoder` from
+the same HMAC secret (`app.jwt.secret`, HS256) — there's no external IdP. A user's roles and
+permissions are flattened into the access token's `authorities` claim at login/register/refresh time
+(`AuthorityMapper`: `ROLE_<NAME>` per role + the permission name per permission), so **authorization
+never re-queries the DB per request** — `JwtAuthenticationConverter` reads authorities straight from
+the token. A role/permission change only takes effect for a user's *next* token (next login or
+refresh) — there is no live revocation of already-issued access tokens short of waiting out
+`app.jwt.access-token-ttl` (15m).
+
+Refresh tokens are opaque, not JWTs, stored hashed (SHA-256) in `tok_refresh_tokens`, delivered only
+via an `HttpOnly` cookie (`app.refresh-token.cookie-name`, scoped to `/auth`). `/auth/refresh` rotates
+them (old one revoked, new one issued) rather than reusing the same token.
+
+### Permissions, and the dynamic "roles:give:&lt;name&gt;" policy
+Permission names are the actual Spring Security authorities (e.g. `roles:create`), checked via
+`@PreAuthorize("hasAuthority('roles:create')")` on controller methods — not `hasRole(...)`. `ROLE_<NAME>`
+authorities exist too but nothing currently checks them.
+
+Assigning a role to a user is a two-layer check, not one:
+1. **Coarse gate, on the controller**: `@PreAuthorize("hasAuthority('roles:assign')")` — can this
+   caller reach the assign/unassign endpoints at all.
+2. **Fine-grained gate, in `RolePolicy.checkCanGiveRole(role)`**, called from inside
+   `AssignRoleAction`/`UnassignRoleAction`: does this caller specifically hold
+   `roles:give:<that role's name>`.
+
+Without step 2, anyone holding the broad `roles:assign` permission could hand out *any* role,
+including `admin` — privilege escalation. `roles:give:<name>` exists per-role so "can assign roles in
+general" and "can grant the admin role specifically" are different, separately-grantable things.
+
+This permission is **created dynamically, not just seeded**: `CreateRoleAction` creates
+`roles:give:<name>` the moment a role is created, and grants it to every role that currently holds
+`roles:manage` (the platform-operator catch-all) — so admins automatically gain the ability to assign
+a brand-new role without a manual migration step, while anyone with only a narrower permission set
+stays unable to grant it until explicitly authorized. `UpdateRoleAction` renames the permission when
+the role is renamed; `DeleteRoleAction` deletes it when the role is deleted. The initial backfill for
+the 4 roles that existed before this mechanism was added lives in
+`db/changelog/migrations/2026_10_09_100000_seed_dynamic_role_grant_permissions.yaml` — any role
+created *after* that migration gets its `roles:give:<name>` purely from `CreateRoleAction`, never from
+a migration.
+
+Self-registration (`RegisterAction`) always assigns the single configured default role
+(`app.signup.default-role`) — there is no caller-supplied role on that path, so it isn't a
+privilege-escalation surface and doesn't go through `RolePolicy`.
+
+### Roles and bootstrap
+`admin` and `full-access` both exist and are seeded with every management permission (including every
+`roles:give:*`); `admin` is the intended role for platform operators, `full-access` is intended as an
+unlimited-quota storage tier for end users. Keep granting new management permissions to both in seed
+data unless a feature specifically wants to split them apart.
+
+`AdminBootstrapRunner` (an `ApplicationRunner`, in `action/auth/`) creates one admin user from
+`app.bootstrap.admin-email`/`admin-password` on startup if neither is blank and no user with that
+email exists yet. This is the only way an admin account gets created from plain config — there is no
+seeded admin user/password in Liquibase (passwords need BCrypt hashing at runtime, not in SQL).
 
 ## API documentation (OpenAPI / Scalar)
 

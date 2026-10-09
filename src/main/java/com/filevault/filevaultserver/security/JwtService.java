@@ -1,6 +1,6 @@
 package com.filevault.filevaultserver.security;
 
-import com.filevault.filevaultserver.user.User;
+import com.filevault.filevaultserver.models.User;
 import java.time.Instant;
 import java.util.List;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;

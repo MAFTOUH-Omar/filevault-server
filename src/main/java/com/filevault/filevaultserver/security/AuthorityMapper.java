@@ -1,6 +1,6 @@
 package com.filevault.filevaultserver.security;
 
-import com.filevault.filevaultserver.user.User;
+import com.filevault.filevaultserver.models.User;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
