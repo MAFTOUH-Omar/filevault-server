@@ -47,6 +47,12 @@ spring:
 
 server:
   port: 8080
+  # Behind a reverse proxy (nginx/Caddy/OCI load balancer) request.getRemoteAddr() would be the proxy
+  # for everyone, collapsing the per-IP rate limits, blacklist and abuse counter into one bucket.
+  # "native" makes Tomcat's RemoteIpValve resolve the real client IP from X-Forwarded-For, honoring
+  # the header only when the direct peer is a trusted proxy (loopback / private ranges by default;
+  # tune with server.tomcat.remoteip.internal-proxies). A direct public client cannot spoof it.
+  forward-headers-strategy: native
   error:
     # Defense in depth: devtools flips include-stacktrace to "always", and the default error body
     # would then leak stack traces. Our own handlers never include these, but never rely on defaults.

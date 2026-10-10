@@ -302,9 +302,13 @@ see `config/FilterConfig`) in this order, cheapest/broadest rejection first:
 2. `IpBlacklistFilter` — 403s any request whose `remoteAddr` exists in `sec_blacklisted_ips`. **DB,
    not Redis**, by design: it's small, changes rarely, and is administered data that should survive a
    cache flush — a plain indexed lookup is fast enough and there's no need to introduce a
-   cache-invalidation problem for this. (Note: uses `request.getRemoteAddr()` directly, i.e. it does
-   *not* trust `X-Forwarded-For` — if this app ever sits behind a reverse proxy, that needs explicit
-   trusted-proxy configuration, otherwise the header is spoofable and this filter becomes bypassable.)
+   cache-invalidation problem for this. (Uses `request.getRemoteAddr()`. Behind a reverse proxy that is
+   only the real client IP because `server.forward-headers-strategy: native` makes Tomcat's
+   `RemoteIpValve` rewrite it from `X-Forwarded-For`, and only when the direct peer is a trusted proxy
+   — loopback/private ranges by default, `server.tomcat.remoteip.internal-proxies` to change. The proxy
+   must *overwrite* the header with the address it saw (nginx: `proxy_set_header X-Forwarded-For
+   $remote_addr;`), otherwise a client-supplied value is forwarded along. Without this, every user
+   would share the proxy's IP and one user's denials would blacklist everybody.)
 3. `GlobalRateLimitFilter` — a broad per-IP budget (`app.rate-limit.global`, default 100/min) across
    *all* routes, a coarse anti-DoS backstop.
 4. `AuthRateLimitFilter` — scoped (via its `FilterRegistrationBean` URL patterns) to only the
