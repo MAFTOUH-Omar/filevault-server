@@ -1,0 +1,11 @@
+api.filevault-omar.duckdns.org {
+    # Only /actuator/health is reachable from the internet. Metrics & co. stay internal: reach them through
+    # 127.0.0.1:3322 on the server (SSH tunnel) or from a Prometheus container on the compose network.
+    @actuator {
+        path /actuator/*
+        not path /actuator/health
+    }
+    respond @actuator 404
+
+    reverse_proxy api:3322
+}

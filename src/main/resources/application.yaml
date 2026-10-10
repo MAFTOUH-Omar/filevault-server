@@ -39,14 +39,21 @@ spring:
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml
 
-  servlet:
-    multipart:
-      max-file-size: ${MAX_FILE_SIZE:200MB}
-      max-request-size: ${MAX_FILE_SIZE:200MB}
-      file-size-threshold: 2MB
-
 server:
-  port: 8080
+  port: 3322
+  # Behind a reverse proxy (nginx/Caddy/OCI load balancer) request.getRemoteAddr() would be the proxy
+  # for everyone, collapsing the per-IP rate limits, blacklist and abuse counter into one bucket.
+  # "native" makes Tomcat's RemoteIpValve resolve the real client IP from X-Forwarded-For, honoring
+  # the header only when the direct peer is a trusted proxy (loopback / private ranges by default;
+  # tune with server.tomcat.remoteip.internal-proxies). A direct public client cannot spoof it.
+  forward-headers-strategy: native
+  error:
+    # Defense in depth: devtools flips include-stacktrace to "always", and the default error body
+    # would then leak stack traces. Our own handlers never include these, but never rely on defaults.
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+    include-exception: false
   tomcat:
     max-swallow-size: -1
 
@@ -54,7 +61,14 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        # Production: health,info (public, see MonitoringSecurityConfig). Anything else needs the monitoring
+        # login; e.g. ACTUATOR_EXPOSE=health,info,metrics,prometheus,httpexchanges,loggers while debugging.
+        include: ${ACTUATOR_EXPOSE:health,info}
+  endpoint:
+    health:
+      # Anonymous callers only get {"status":"UP"}; the monitoring user also sees db/redis component detail.
+      show-details: when-authorized
+      roles: MONITOR
 
 springdoc:
   api-docs:
@@ -75,15 +89,28 @@ app:
     cookie-name: refresh_token
     cookie-secure: ${COOKIE_SECURE:false}   # true en production (HTTPS)
     cookie-same-site: Lax
-  links:
-    secret: ${LINK_SECRET}
-    ttl: 5m
   signup:
     default-role: member
   storage:
-    root: ${STORAGE_ROOT:./storage}
+    # File bytes live in Cloudflare R2 (S3-compatible) and travel client <-> R2 through presigned
+    # URLs; this server never receives them (so there is no multipart/upload size config here).
+    r2:
+      account-id: ${R2_ACCOUNT_ID}
+      access-key-id: ${R2_ACCESS_KEY_ID}
+      secret-access-key: ${R2_SECRET_ACCESS_KEY}
+      bucket: ${R2_BUCKET}
+      endpoint: ${R2_ENDPOINT:}   # empty = https://<account-id>.r2.cloudflarestorage.com
+    max-file-size-bytes: ${MAX_FILE_SIZE_BYTES:209715200}   # 200 MiB, validated against the declared size
+    upload-url-ttl: 15m
+    download-url-ttl: 5m
+    pending-upload-ttl: 30m          # unconfirmed uploads older than this are purged, quota released
+    cleanup-interval-seconds: 600
   cors:
     allowed-origins: ${CORS_ORIGINS:http://localhost:3000}
+  monitoring:
+    username: monitor
+    password: ${MONITORING_PASSWORD:}      # >= 16 chars; empty = no monitoring login at all
+    record-requests: ${RECORD_REQUESTS:false}   # keeps the last 500 requests for /actuator/httpexchanges
   bootstrap:
     admin-email: ${ADMIN_EMAIL:}
     admin-password: ${ADMIN_PASSWORD:}
@@ -94,7 +121,15 @@ app:
     auth:
       limit: 10
       window: 1m
+  abuse:
+    # Denied requests (bad credentials, bad token, missing permission) per IP inside `window`:
+    # from warn-after on every denial carries a warning, the blacklist-after-th blacklists the IP.
+    warn-after: 3
+    blacklist-after: 6
+    window: 1h
 
 logging:
   level:
     com.filevault: DEBUG
+    # SQL statements only (never bind values, which would put user data in the logs). DEBUG to see them.
+    org.hibernate.SQL: ${SQL_LOG_LEVEL:INFO}

@@ -19,13 +19,22 @@ public class RedisRateLimiter {
     }
 
     public boolean tryConsume(String key, int limit, Duration window) {
+        return increment(key, window) <= limit;
+    }
+
+    /** Adds one to the counter at {@code key} (starting its {@code window} TTL on first use) and returns the new count. */
+    public long increment(String key, Duration window) {
         Long count = redisTemplate.opsForValue().increment(key);
         if (count == null) {
-            return true;
+            return 0L;
         }
         if (count == 1L) {
             redisTemplate.expire(key, window);
         }
-        return count <= limit;
+        return count;
+    }
+
+    public void reset(String key) {
+        redisTemplate.delete(key);
     }
 }

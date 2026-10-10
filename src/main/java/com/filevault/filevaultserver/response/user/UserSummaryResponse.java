@@ -7,7 +7,13 @@ import java.util.List;
 import java.util.UUID;
 
 /** Serializable so Spring's RedisCacheManager can store it (see MeAction / UserSummaryCacheEvictor). */
-public record UserSummaryResponse(UUID id, String email, String fullName, List<String> roles, List<String> permissions)
+public record UserSummaryResponse(
+        UUID id,
+        String email,
+        String fullName,
+        long storageUsedBytes,
+        List<String> roles,
+        List<String> permissions)
         implements Serializable {
 
     public static UserSummaryResponse from(User user) {
@@ -15,6 +21,7 @@ public record UserSummaryResponse(UUID id, String email, String fullName, List<S
                 user.getUsrId(),
                 user.getUsrEmail(),
                 user.getUsrFullName(),
+                user.getUsrStorageUsedBytes(),
                 AuthorityMapper.roleNames(user).stream().sorted().toList(),
                 AuthorityMapper.permissionNames(user).stream().sorted().toList());
     }
