@@ -11,7 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /** Applies to every request, keyed by client IP alone — a coarse anti-DoS backstop. The stricter,
- *  per-endpoint budget for /auth/register and /auth/login is enforced separately by
+ *  per-endpoint budget for the unauthenticated /auth/* endpoints is enforced separately by
  *  AuthRateLimitFilter; a caller must pass both. */
 public class GlobalRateLimitFilter extends OncePerRequestFilter {
 

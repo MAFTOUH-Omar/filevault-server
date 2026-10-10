@@ -56,7 +56,7 @@ public class FilterConfig {
             RedisRateLimiter rateLimiter, RateLimitProperties properties, ErrorResponseWriter errorResponseWriter) {
         FilterRegistrationBean<AuthRateLimitFilter> registration =
                 new FilterRegistrationBean<>(new AuthRateLimitFilter(rateLimiter, properties, errorResponseWriter));
-        registration.addUrlPatterns("/auth/register", "/auth/login");
+        registration.addUrlPatterns("/auth/register", "/auth/login", "/auth/refresh", "/auth/logout");
         registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 3);
         return registration;
     }

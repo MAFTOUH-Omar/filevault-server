@@ -10,8 +10,9 @@ import java.io.IOException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-/** Scoped (via its FilterRegistrationBean URL patterns) to /auth/register and /auth/login only —
- *  a tighter budget than the global filter to blunt credential-stuffing and spam-registration. */
+/** Scoped (via its FilterRegistrationBean URL patterns) to the unauthenticated /auth/* endpoints
+ *  (register, login, refresh, logout) — a tighter budget than the global filter to blunt
+ *  credential-stuffing, refresh-token guessing and spam-registration. */
 public class AuthRateLimitFilter extends OncePerRequestFilter {
 
     private final RedisRateLimiter rateLimiter;

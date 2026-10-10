@@ -39,6 +39,8 @@ On Windows use `mvnw.cmd` instead of `./mvnw` from `cmd.exe`/PowerShell if the w
   support. Required vars: `DB_USER`, `DB_PASSWORD`, `JWT_SECRET`, `LINK_SECRET`. Optional: `DB_URL`,
   `MAX_FILE_SIZE`, `COOKIE_SECURE`, `CORS_ORIGINS`, `STORAGE_ROOT`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`,
   `REDIS_HOST` (default `localhost`), `REDIS_PORT` (default `6379`), `REDIS_PASSWORD` (default empty).
+- `app.abuse.{warn-after,blacklist-after,window}` configure the denial → warning → blacklist ladder (see
+  "Repeated denials" below).
 - `app.rate-limit.global.{limit,window}` and `app.rate-limit.auth.{limit,window}` configure the two
   Redis-backed rate limits (see "Rate limiting & abuse protection" below) — change these, not the
   filter code, to retune thresholds.
@@ -197,10 +199,13 @@ Self-registration (`RegisterAction`) always assigns the single configured defaul
 privilege-escalation surface and doesn't go through `RolePolicy`.
 
 ### User-facing identity: register/login/refresh/me all return the same shape
-`response/user/UserSummaryResponse` (id, email, fullName, roles, permissions — plain names, not JWT
+`response/user/UserSummaryResponse` (id, email, fullName, storageUsedBytes, roles, permissions — plain names, not JWT
 `ROLE_`-prefixed authorities) is built from a `User` entity via `UserSummaryResponse.from(user)`, using
 `AuthorityMapper.roleNames`/`permissionNames`. `AuthResponse` embeds one (`register`/`login`/`refresh`
 all return it, so the client always knows what the new token can do without decoding the JWT).
+`storageUsedBytes` mirrors `usr_storage_used_bytes`; the upload/delete actions (not written yet) must
+evict via `UserSummaryCacheEvictor` whenever they change that counter, or `/auth/me` shows a stale value
+for up to the 5-minute cache TTL.
 `GET /auth/me` returns the same shape, read from the DB *or cache* (see "Caching" below) — it's the
 one place that intentionally looks past the JWT claims, since its whole purpose is "what does the
 system say right now", unlike authorization checks which must stay token-only. `/auth/me` (and its
@@ -302,8 +307,8 @@ see `config/FilterConfig`) in this order, cheapest/broadest rejection first:
    trusted-proxy configuration, otherwise the header is spoofable and this filter becomes bypassable.)
 3. `GlobalRateLimitFilter` — a broad per-IP budget (`app.rate-limit.global`, default 100/min) across
    *all* routes, a coarse anti-DoS backstop.
-4. `AuthRateLimitFilter` — scoped (via its `FilterRegistrationBean` URL patterns) to only
-   `/auth/register` and `/auth/login`, with a tighter budget (`app.rate-limit.auth`, default 10/min
+4. `AuthRateLimitFilter` — scoped (via its `FilterRegistrationBean` URL patterns) to only the
+   unauthenticated `/auth/register`, `/auth/login`, `/auth/refresh` and `/auth/logout`, with a tighter budget (`app.rate-limit.auth`, default 10/min
    per IP *per endpoint*) to blunt credential-stuffing/spam-registration specifically. A caller must
    pass both this and the global filter.
 
@@ -317,6 +322,36 @@ All four filters write `middleware.ErrorResponse` JSON directly via `middleware/
 (a shared `ObjectMapper`-backed helper) instead of throwing — a `Filter` runs outside
 `DispatcherServlet`, so an exception thrown here would **not** be caught by `GlobalExceptionHandler`.
 Keep that pattern for any new perimeter filter.
+
+### Never leak internals in an error response
+Every error body is `middleware.ErrorResponse(code, message)` and nothing else — no Boot default JSON
+(`timestamp`/`path`/`trace`), no exception class names, SQL, constraint names or framework text.
+- `GlobalExceptionHandler` extends `ResponseEntityExceptionHandler`, so *every* Spring MVC exception (bad
+  JSON, type mismatch, 404/405/415, ...) goes through `handleExceptionInternal` and gets a fixed message from
+  `ErrorResponse.generic(status)`. Our own domain exceptions pass their message through (written to be
+  client-safe — keep them free of internals). A final `@ExceptionHandler(Exception.class)` logs the real cause
+  and answers a generic 500; `DataIntegrityViolationException` is a generic 409.
+- `middleware/ErrorEndpointController` replaces Boot's `BasicErrorController` for anything reaching `/error`
+  (`/error` is `permitAll` in `SecurityConfig` so the real status isn't masked by a 401), and
+  `server.error.include-*` are pinned to `never` in `application.yaml` (devtools would otherwise turn
+  stack traces on).
+- New exception type? Either give it a client-safe message and a dedicated handler, or let the catch-all
+  handle it. Never put `ex.getMessage()` of a third-party/DB exception into a response.
+
+### Repeated denials: warning, then IP blacklist
+`security/AbuseGuard.deny(ip, status, code, message)` counts denied requests per IP in Redis
+(`abuse:denials:<ip>`, `app.abuse.window`, default 1h). With the defaults (`app.abuse.warn-after: 3`,
+`blacklist-after: 6`): denials 1–2 are plain, denials 3–5 carry `"... Warning: ... your IP will be blocked
+after N more."` in the message (status/code unchanged), and the 6th inserts the IP into
+`sec_blacklisted_ips` and answers `403 IP_BLOCKED`. From then on `IpBlacklistFilter` rejects *every* request
+from that IP — login/register/refresh included — before it reaches Spring Security. Blacklisting is permanent
+until an admin deletes the row.
+What counts as a denial: bad credentials (`InvalidCredentialsException`), bad refresh token, a bearer token
+that was presented and is invalid, and any 403 (`@PreAuthorize` `AccessDeniedException`,
+`ForbiddenRoleGrantException`, filter-chain `RestAccessDeniedHandler`). What deliberately does *not*: no
+token at all, an *expired* token, a missing refresh cookie, and 429s — routine for a SPA, they would get
+honest users blacklisted. Any new code path that answers 401/403 must go through `AbuseGuard.deny` (the
+entry point / denied handler in `security/` and `GlobalExceptionHandler.denied` are the existing callers).
 
 ## API documentation (OpenAPI / Scalar)
 

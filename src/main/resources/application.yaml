@@ -47,6 +47,13 @@ spring:
 
 server:
   port: 8080
+  error:
+    # Defense in depth: devtools flips include-stacktrace to "always", and the default error body
+    # would then leak stack traces. Our own handlers never include these, but never rely on defaults.
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+    include-exception: false
   tomcat:
     max-swallow-size: -1
 
@@ -94,6 +101,12 @@ app:
     auth:
       limit: 10
       window: 1m
+  abuse:
+    # Denied requests (bad credentials, bad token, missing permission) per IP inside `window`:
+    # from warn-after on every denial carries a warning, the blacklist-after-th blacklists the IP.
+    warn-after: 3
+    blacklist-after: 6
+    window: 1h
 
 logging:
   level:
