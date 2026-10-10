@@ -1,0 +1,47 @@
+databaseChangeLog:
+  - changeSet:
+      id: 2026_10_09_090000_seed_role_management_permissions
+      author: filevault
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO prm_permissions (prm_name, prm_description) VALUES
+                ('roles:create', 'Créer un rôle'),
+                ('roles:read',   'Lister et consulter les rôles'),
+                ('roles:update', 'Modifier un rôle (nom, quota, permissions)'),
+                ('roles:delete', 'Supprimer un rôle'),
+                ('roles:assign', 'Attribuer ou retirer un rôle à un utilisateur');
+
+              -- un rôle admin dédié à la gestion de la plateforme (distinct de full-access,
+              -- qui concerne surtout le quota de stockage illimité)
+              INSERT INTO rol_roles (rol_name, rol_storage_quota_bytes) VALUES
+                ('admin', NULL);
+
+              INSERT INTO rol_prm (rol_id, prm_id)
+                SELECT r.rol_id, p.prm_id FROM rol_roles r
+                JOIN prm_permissions p ON p.prm_name IN (
+                  'roles:create', 'roles:read', 'roles:update', 'roles:delete', 'roles:assign',
+                  'users:read', 'users:manage', 'roles:manage', 'files:manage-all'
+                )
+                WHERE r.rol_name = 'admin';
+
+              -- full-access garde sa sémantique "toutes les permissions existantes" :
+              -- on lui attribue aussi les nouvelles permissions de gestion des rôles
+              INSERT INTO rol_prm (rol_id, prm_id)
+                SELECT r.rol_id, p.prm_id FROM rol_roles r
+                JOIN prm_permissions p ON p.prm_name IN (
+                  'roles:create', 'roles:read', 'roles:update', 'roles:delete', 'roles:assign'
+                )
+                WHERE r.rol_name = 'full-access';
+      rollback:
+        - sql:
+            sql: |
+              DELETE FROM rol_prm
+                WHERE rol_id IN (SELECT rol_id FROM rol_roles WHERE rol_name = 'admin')
+                   OR prm_id IN (
+                     SELECT prm_id FROM prm_permissions
+                     WHERE prm_name IN ('roles:create', 'roles:read', 'roles:update', 'roles:delete', 'roles:assign')
+                   );
+              DELETE FROM rol_roles WHERE rol_name = 'admin';
+              DELETE FROM prm_permissions
+                WHERE prm_name IN ('roles:create', 'roles:read', 'roles:update', 'roles:delete', 'roles:assign');

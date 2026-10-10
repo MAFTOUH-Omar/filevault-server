@@ -1,0 +1,27 @@
+databaseChangeLog:
+  - changeSet:
+      id: 2026_10_09_100000_seed_dynamic_role_grant_permissions
+      author: filevault
+      comment: >
+        One "roles:give:<name>" permission per existing role, so that assigning a role to a
+        user requires explicit authorization for THAT specific role, not just a blanket
+        roles:assign. Future roles get their matching permission created dynamically by
+        CreateRoleAction, not by a migration.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO prm_permissions (prm_name, prm_description)
+                SELECT 'roles:give:' || rol_name, 'Peut attribuer le rôle ' || rol_name
+                FROM rol_roles;
+
+              INSERT INTO rol_prm (rol_id, prm_id)
+                SELECT r.rol_id, p.prm_id
+                FROM rol_roles r
+                JOIN prm_permissions p ON p.prm_name LIKE 'roles:give:%'
+                WHERE r.rol_name IN ('admin', 'full-access');
+      rollback:
+        - sql:
+            sql: |
+              DELETE FROM rol_prm
+                WHERE prm_id IN (SELECT prm_id FROM prm_permissions WHERE prm_name LIKE 'roles:give:%');
+              DELETE FROM prm_permissions WHERE prm_name LIKE 'roles:give:%';

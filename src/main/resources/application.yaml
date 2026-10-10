@@ -10,6 +10,23 @@ spring:
     username: ${DB_USER}
     password: ${DB_PASSWORD}
 
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+  cache:
+    type: redis
+    redis:
+      time-to-live: 5m   # safety-net TTL; mutations also explicitly evict (see UserSummaryCacheEvictor)
+
+  mvc:
+    # Responses (including Bean Validation messages) are always in English, regardless of the
+    # client's Accept-Language header.
+    locale: en
+    locale-resolver: fixed
+
   jpa:
     open-in-view: false        # évite les requêtes SQL cachées
     hibernate:
@@ -70,6 +87,13 @@ app:
   bootstrap:
     admin-email: ${ADMIN_EMAIL:}
     admin-password: ${ADMIN_PASSWORD:}
+  rate-limit:
+    global:
+      limit: 100
+      window: 1m
+    auth:
+      limit: 10
+      window: 1m
 
 logging:
   level:
