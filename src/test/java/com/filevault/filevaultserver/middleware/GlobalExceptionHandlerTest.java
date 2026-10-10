@@ -11,6 +11,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.filevault.filevaultserver.exception.file.FileTooLargeException;
+import com.filevault.filevaultserver.exception.file.StorageQuotaExceededException;
+import com.filevault.filevaultserver.exception.file.StorageUnavailableException;
+import com.filevault.filevaultserver.exception.file.UploadNotReceivedException;
+import com.filevault.filevaultserver.exception.file.UploadSizeMismatchException;
 import com.filevault.filevaultserver.security.AbuseGuard;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -56,6 +61,17 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/probe/db")
         String db() {
             throw new DataIntegrityViolationException("duplicate key value violates unique constraint uk_usr_email");
+        }
+
+        @GetMapping("/probe/file/{kind}")
+        String fileErrors(@PathVariable("kind") String kind) {
+            throw switch (kind) {
+                case "too-large" -> new FileTooLargeException(10);
+                case "quota" -> new StorageQuotaExceededException();
+                case "not-received" -> new UploadNotReceivedException();
+                case "mismatch" -> new UploadSizeMismatchException();
+                default -> new StorageUnavailableException();
+            };
         }
 
         @GetMapping("/probe/denied")
@@ -139,5 +155,22 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.code").value("FORBIDDEN"))
                 .andExpect(jsonPath("$.message").value("Access denied"));
         org.mockito.Mockito.verify(abuseGuard).deny(anyString(), eq(HttpStatus.FORBIDDEN), eq("FORBIDDEN"), eq("Access denied"));
+    }
+
+    @Test
+    void fileErrorsMapToTheirStatusAndStableCode() throws Exception {
+        record Case(String kind, int status, String code) {
+        }
+        for (Case c : new Case[] {
+            new Case("too-large", 413, "FILE_TOO_LARGE"),
+            new Case("quota", 409, "STORAGE_QUOTA_EXCEEDED"),
+            new Case("not-received", 409, "UPLOAD_NOT_RECEIVED"),
+            new Case("mismatch", 422, "UPLOAD_SIZE_MISMATCH"),
+            new Case("unavailable", 503, "STORAGE_UNAVAILABLE")
+        }) {
+            mockMvc.perform(get("/probe/file/{kind}", c.kind()))
+                    .andExpect(status().is(c.status()))
+                    .andExpect(jsonPath("$.code").value(c.code()));
+        }
     }
 }

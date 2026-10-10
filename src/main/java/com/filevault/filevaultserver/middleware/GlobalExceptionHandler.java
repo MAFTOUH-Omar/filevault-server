@@ -4,6 +4,12 @@ import com.filevault.filevaultserver.exception.auth.EmailAlreadyUsedException;
 import com.filevault.filevaultserver.exception.auth.InvalidCredentialsException;
 import com.filevault.filevaultserver.exception.auth.InvalidRefreshTokenException;
 import com.filevault.filevaultserver.exception.auth.TooManyProfileChangesException;
+import com.filevault.filevaultserver.exception.file.FileTooLargeException;
+import com.filevault.filevaultserver.exception.file.StorageQuotaExceededException;
+import com.filevault.filevaultserver.exception.file.StorageUnavailableException;
+import com.filevault.filevaultserver.exception.file.StoredFileNotFoundException;
+import com.filevault.filevaultserver.exception.file.UploadNotReceivedException;
+import com.filevault.filevaultserver.exception.file.UploadSizeMismatchException;
 import com.filevault.filevaultserver.exception.role.ForbiddenRoleGrantException;
 import com.filevault.filevaultserver.exception.role.RoleAlreadyExistsException;
 import com.filevault.filevaultserver.exception.role.RoleHasUsersException;
@@ -123,9 +129,36 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse("ROLE_HAS_USERS", ex.getMessage()));
     }
 
-    @ExceptionHandler({RoleNotFoundException.class, UserNotFoundException.class})
+    @ExceptionHandler({RoleNotFoundException.class, UserNotFoundException.class, StoredFileNotFoundException.class})
     public ResponseEntity<ErrorResponse> handleNotFound(RuntimeException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ErrorResponse("NOT_FOUND", ex.getMessage()));
+    }
+
+    @ExceptionHandler(FileTooLargeException.class)
+    public ResponseEntity<ErrorResponse> handleFileTooLarge(FileTooLargeException ex) {
+        return ResponseEntity.status(HttpStatus.CONTENT_TOO_LARGE).body(new ErrorResponse("FILE_TOO_LARGE", ex.getMessage()));
+    }
+
+    @ExceptionHandler(StorageQuotaExceededException.class)
+    public ResponseEntity<ErrorResponse> handleQuotaExceeded(StorageQuotaExceededException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse("STORAGE_QUOTA_EXCEEDED", ex.getMessage()));
+    }
+
+    @ExceptionHandler(UploadNotReceivedException.class)
+    public ResponseEntity<ErrorResponse> handleUploadNotReceived(UploadNotReceivedException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse("UPLOAD_NOT_RECEIVED", ex.getMessage()));
+    }
+
+    @ExceptionHandler(UploadSizeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleUploadSizeMismatch(UploadSizeMismatchException ex) {
+        return ResponseEntity.status(422).body(new ErrorResponse("UPLOAD_SIZE_MISMATCH", ex.getMessage()));
+    }
+
+    @ExceptionHandler(StorageUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handleStorageUnavailable(StorageUnavailableException ex) {
+        // The SDK failure behind it was already logged where it happened.
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(new ErrorResponse("STORAGE_UNAVAILABLE", ex.getMessage()));
     }
 
     @ExceptionHandler(TooManyProfileChangesException.class)

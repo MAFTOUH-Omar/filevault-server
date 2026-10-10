@@ -1,0 +1,24 @@
+databaseChangeLog:
+  - changeSet:
+      id: 2026_10_10_020000_add_stored_file_status
+      author: filevault
+      changes:
+        # Uploads go straight from the client to the object store, so a row exists (with its quota
+        # reserved) before its bytes do: PENDING until the client confirms, then READY.
+        - addColumn:
+            tableName: fil_stored_files
+            columns:
+              - column:
+                  name: fil_status
+                  type: varchar(16)
+                  defaultValue: READY      # rows that predate this column were fully stored
+                  constraints:
+                    nullable: false
+        # The expired-upload sweeper only ever scans PENDING rows, a tiny and short-lived subset of
+        # the table, so index just those (Liquibase's createIndex has no WHERE clause).
+        - sql:
+            sql: >
+              CREATE INDEX idx_fil_stored_files_pending_created_at
+              ON fil_stored_files (fil_created_at)
+              WHERE fil_status = 'PENDING'
+            rollback: DROP INDEX idx_fil_stored_files_pending_created_at

@@ -7,7 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Spring Boot 4.1.1 / Java 27 backend for FileVault, a file storage service with JWT auth, role-based
 permissions, and per-user storage quotas. PostgreSQL + Liquibase for schema management. Auth
 (register/login/refresh/logout) and role/permission management (CRUD + assigning roles to users) are
-implemented; file upload/storage endpoints are not yet.
+implemented, and so are file endpoints (`/api/files`): file contents live in Cloudflare R2 and travel
+directly between client and R2 through presigned URLs (see "File storage" below). The app is meant to
+run on an Oracle Cloud VM behind a reverse proxy.
 
 ## Commands
 
@@ -36,8 +38,10 @@ On Windows use `mvnw.cmd` instead of `./mvnw` from `cmd.exe`/PowerShell if the w
 - `src/main/resources/application.yaml` is the single config file; all secrets/environment-specific
   values are pulled from env vars with `${VAR:default}` placeholders, loaded from a local `.env` file
   (`spring.config.import: optional:file:.env[.properties]`) via `spring-boot-starter-liquibase`'s dotenv
-  support. Required vars: `DB_USER`, `DB_PASSWORD`, `JWT_SECRET`, `LINK_SECRET`. Optional: `DB_URL`,
-  `MAX_FILE_SIZE`, `COOKIE_SECURE`, `CORS_ORIGINS`, `STORAGE_ROOT`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`,
+  support. Required vars: `DB_USER`, `DB_PASSWORD`, `JWT_SECRET`, `R2_ACCOUNT_ID`,
+  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (startup fails if any is missing). Optional: `DB_URL`,
+  `MAX_FILE_SIZE_BYTES` (default 200 MiB), `R2_ENDPOINT` (S3-compatible stand-in, empty = Cloudflare),
+  `COOKIE_SECURE`, `CORS_ORIGINS`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`,
   `REDIS_HOST` (default `localhost`), `REDIS_PORT` (default `6379`), `REDIS_PASSWORD` (default empty).
 - `app.abuse.{warn-after,blacklist-after,window}` configure the denial → warning → blacklist ladder (see
   "Repeated denials" below).
@@ -46,9 +50,10 @@ On Windows use `mvnw.cmd` instead of `./mvnw` from `cmd.exe`/PowerShell if the w
   filter code, to retune thresholds.
 - `spring.jpa.hibernate.ddl-auto` is `validate` — Hibernate never modifies the schema. All schema
   changes must go through a new Liquibase changeset; do not rely on JPA auto-DDL.
-- `app.*` keys in `application.yaml` define JWT issuer/TTL, refresh-token cookie settings, signed-link
-  TTL for `LINK_SECRET`, default signup role, local file storage root, and CORS origins — read these
-  before implementing auth/link/storage features rather than inventing new config keys.
+- `app.*` keys in `application.yaml` define JWT issuer/TTL, refresh-token cookie settings, default signup
+  role, the R2/storage settings (`app.storage.*`) and CORS origins — read these before implementing
+  auth/storage features rather than inventing new config keys. (`LINK_SECRET`/`app.links` and the local
+  `app.storage.root` no longer exist: R2 signs the temporary links itself and nothing is stored on disk.)
 
 ## Naming conventions
 
@@ -83,8 +88,10 @@ editing it). Current schema (see naming convention above for the prefix scheme):
 - `tok_refresh_tokens` — UUID PK, stores a hash of the refresh token (`tok_token_hash`, not the raw
   token), FK `usr_id` to `usr_users` with cascade delete.
 - `fil_stored_files` — UUID PK, FK `usr_id` to the owning user, `fil_storage_key` is the unique
-  on-disk/physical key (distinct from `fil_original_name`), indexed by `(usr_id, fil_created_at)` for
-  listing.
+  object key in the R2 bucket (`<usrId>/<filId>`, distinct from `fil_original_name`), indexed by
+  `(usr_id, fil_created_at)` for listing. `fil_status` is `PENDING` (quota reserved, upload not yet
+  confirmed) or `READY`; a partial index `idx_fil_stored_files_pending_created_at` (PENDING rows only)
+  serves the expired-upload sweeper.
 - `sec_blacklisted_ips` — bigint PK, unique `sec_ip_address` (varchar(45), fits IPv4 and IPv6),
   optional `sec_reason`. Source of truth for `IpBlacklistFilter`; administer it directly (no CRUD
   endpoint exists yet — add one under `roles:manage`-equivalent protection if/when needed).
@@ -117,8 +124,8 @@ separate):
 - `models/` — JPA entities (`User`, `Role`, `Permission`, `RefreshToken`), flat, no sub-packages.
 - `controller/` — `@RestController`s. Thin: validate via `@Valid`, delegate to one Action, map the
   result to a `ResponseEntity`. No business logic here.
-- `policy/` — authorization decisions that don't fit a declarative `@PreAuthorize` string (currently
-  just `RolePolicy`, see below). A policy throws its own exception on denial; it doesn't return a
+- `policy/` — authorization decisions that don't fit a declarative `@PreAuthorize` string (`RolePolicy`
+  and `FilePolicy`, see below). A policy throws its own exception on denial; it doesn't return a
   boolean for the caller to check.
 - `action/<domain>/` — one class per use case/write operation (`CreateRoleAction`, `LoginAction`, ...),
   each with a single `execute(...)` method. This replaces a monolithic `*Service` — if a use case
@@ -144,7 +151,11 @@ separate):
   (`JwtService`), `SecurityConfig`, `AuthorityMapper`, `RedisRateLimiter`, and a typed
   `@ConfigurationProperties` record per `app.*` config block. Not part of the layering above on
   purpose — it's cross-cutting.
-- `config/` — `@Configuration` classes that only wire beans together, no business logic:
+- `storage/` — infrastructure for file contents, like `security/` not part of the domain layering:
+  `ObjectStorage` (the port: presign upload/download, size lookup, delete), `R2ObjectStorage` (its
+  Cloudflare R2 implementation over the AWS SDK v2 S3 client) and the `StorageProperties` record.
+- `config/` — `@Configuration` classes that only wire beans together, no business logic (`R2Config`
+  builds the S3 client/presigner):
   `FilterConfig` (registers the `middleware/` filters with explicit order/URL patterns) and
   `OpenApiConfig` (API title + the `bearerAuth` security scheme).
 
@@ -239,7 +250,10 @@ silently bypasses it. Current call sites: `AssignRoleAction`, `UnassignRoleActio
 archive-transfer (evicts every transferred user), `RoleProvisioner` (evicts every user of every role
 that gains a new `roles:give:<name>` permission when another role is created — this is the easy-to-miss
 one: creating role X can change what `roles:manage` holders are *entitled to*, even though their own
-roles didn't change), and `ChangeEmailAction`. Adding a new way for a user's roles/permissions/email to
+roles didn't change), and `ChangeEmailAction`, and every file action that moves `usr_storage_used_bytes`
+(`InitiateUploadAction`, `DeleteFileAction`, `PurgeExpiredUploadsAction`, the size-mismatch branch of
+`CompleteUploadAction`) since `/auth/me` exposes `storageUsedBytes`. Adding a new way for a user's
+roles/permissions/email/storage to
 change? Evict there too, or rely on the 5-minute TTL to self-heal (acceptable only if a few minutes of
 staleness on `/auth/me` specifically is fine for that case — it never affects actual authorization,
 which is JWT-only and unrelated to this cache).
@@ -288,6 +302,68 @@ data unless a feature specifically wants to split them apart.
 `app.bootstrap.admin-email`/`admin-password` on startup if neither is blank and no user with that
 email exists yet. This is the only way an admin account gets created from plain config — there is no
 seeded admin user/password in Liquibase (passwords need BCrypt hashing at runtime, not in SQL).
+
+## File storage (Cloudflare R2, direct upload)
+
+File bytes **never pass through this server**. R2 is S3-compatible; `config/R2Config` builds an AWS SDK v2
+`S3Client` + `S3Presigner` against `https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com` (region `auto`,
+path-style, and the SDK's default CRC32 checksums turned off — R2 rejects them, notably on presigned PUT
+URLs). The bucket stays private; every access is a presigned URL, which is a credential — never log one.
+
+Upload is two steps (`POST /api/files`, `POST /api/files/{id}/complete`):
+1. `InitiateUploadAction` checks `app.storage.max-file-size-bytes`, then `FileLedger.reserve` atomically
+   reserves quota and inserts a `PENDING` row, and a presigned PUT is returned. The client must PUT exactly
+   `sizeBytes` bytes with the returned `uploadHeaders` (Content-Type is signed; so is Content-Length).
+2. `CompleteUploadAction` asks R2 how big the object really is (`ObjectStorage.sizeOf`); only an exact match
+   becomes `READY`. A mismatch discards the upload (row, quota, object); nothing there yet gives 409 so the
+   client can retry. Calling it on a `READY` file is a no-op.
+
+Download is `GET /api/files/{id}/download` → a presigned GET (`app.storage.download-url-ttl`, 5 min) that
+forces `Content-Disposition: attachment` under the original name (built with Spring's `ContentDisposition`,
+so a hostile file name cannot inject headers). Files are reachable by their owner or by `files:manage-all`
+holders; anyone else gets 404, never 403 (`FilePolicy`, so ids can't be probed).
+
+Things that are easy to break:
+- **Quota is one SQL statement**, `UserRepository.reserveStorage`: `UPDATE usr_users SET used = used + :bytes
+  WHERE <role quota allows it>`. The effective quota is the *largest* `rol_storage_quota_bytes` among the
+  user's roles, a NULL role quota means unlimited, no role means zero. Never read-then-write it in Java —
+  parallel uploads would overshoot (verified: 8 parallel 200 MiB requests against a 1 GiB quota → exactly 5
+  succeed). Reserved bytes count in `storageUsedBytes` immediately, including for still-`PENDING` uploads.
+- **Row and counter change together or not at all**: all DB work is in `action/file/FileLedger` (one short
+  transaction per method). R2 calls are deliberately *outside* transactions so a slow R2 never holds a DB
+  connection. Status changes are conditional statements (`updateStatus`, `deleteRowIfStatus`), so the
+  user confirming and the sweeper purging can race safely — whoever runs first wins and the other no-ops.
+- **Ordering of DB vs R2**: user delete is object first, row second (R2 down ⇒ 503 and nothing changed,
+  safely retryable); system cleanups (sweeper, size mismatch) claim the row first and delete the object
+  second, so a concurrently-confirmed file never loses its object. A failed best-effort object delete only
+  leaves an orphan (`deleteQuietly` logs it).
+- **Abandoned uploads**: `PurgeExpiredUploadsAction` runs every `app.storage.cleanup-interval-seconds` and
+  purges `PENDING` rows older than `app.storage.pending-upload-ttl` (30 min, longer than the 15 min upload
+  URL), releasing their quota. Also set an R2 lifecycle rule to abort incomplete multipart uploads and
+  cover the orphan case.
+- `R2ObjectStorage` turns every SDK failure into `StorageUnavailableException` (503, client-safe message);
+  the cause is logged there. Keep SDK types out of actions and exceptions out of responses.
+
+Setup on Cloudflare: create a private bucket and an R2 API token scoped to it (Object Read & Write), then
+set a **CORS rule on the bucket** allowing `PUT`/`GET`/`HEAD` from the frontend origin with `Content-Type`
+as an allowed header — browsers upload straight to R2, so this is R2's CORS, not `CORS_ORIGINS`.
+
+Testing without a Cloudflare account: `src/test/.../storage/FakeS3Server` is an in-memory path-style S3
+stand-in (`java -cp target/test-classes com.filevault.filevaultserver.storage.FakeS3Server 19000`, then run
+the app with `R2_ENDPOINT=http://127.0.0.1:19000` and dummy keys). It does **not** check signatures, so it
+proves the flow but not that R2 accepts the signed requests — that still needs a real bucket.
+
+## Deploying behind a reverse proxy (Oracle Cloud)
+
+- `server.forward-headers-strategy: native` is set, so `getRemoteAddr()` is the real client IP (see the
+  note on `IpBlacklistFilter`). The proxy must **overwrite** `X-Forwarded-For` (nginx:
+  `proxy_set_header X-Forwarded-For $remote_addr;`) and must be loopback or in a private range, otherwise
+  its header is ignored and every user shares the proxy's IP.
+- Production env: `COOKIE_SECURE=true` (HTTPS), `CORS_ORIGINS` set to the real frontend origin, all `R2_*`
+  vars, a strong `JWT_SECRET`; keep `.env` (or a systemd `EnvironmentFile`) readable by the app user only.
+- Oracle specifics: open 443/80 in the VCN security list *and* in the instance firewall (Ubuntu images ship
+  restrictive iptables rules); Ampere (ARM) shapes run the same JAR; keep Postgres and Redis on private
+  addresses, not the public IP.
 
 ## Rate limiting & abuse protection
 
