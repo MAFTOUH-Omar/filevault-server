@@ -97,14 +97,22 @@ public class SecurityConfig {
         return http.build();
     }
 
+    /**
+     * Comma-separated origins from CORS_ORIGINS. A browser's Origin header never ends with "/", so a pasted
+     * "https://app.vercel.app/" would silently match nothing: trailing slashes are dropped.
+     */
+    static List<String> parseOrigins(String commaSeparated) {
+        return Arrays.stream(commaSeparated.split(","))
+                .map(String::trim)
+                .map(origin -> origin.replaceAll("/+$", ""))
+                .filter(origin -> !origin.isEmpty())
+                .toList();
+    }
+
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        List<String> origins = Arrays.stream(corsProperties.allowedOrigins().split(","))
-                .map(String::trim)
-                .filter(origin -> !origin.isEmpty())
-                .toList();
-        configuration.setAllowedOrigins(origins);
+        configuration.setAllowedOrigins(parseOrigins(corsProperties.allowedOrigins()));
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
         configuration.setAllowCredentials(true);

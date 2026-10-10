@@ -41,7 +41,7 @@ On Windows use `mvnw.cmd` instead of `./mvnw` from `cmd.exe`/PowerShell if the w
   support. Required vars: `DB_USER`, `DB_PASSWORD`, `JWT_SECRET`, `R2_ACCOUNT_ID`,
   `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (startup fails if any is missing). Optional: `DB_URL`,
   `MAX_FILE_SIZE_BYTES` (default 200 MiB), `R2_ENDPOINT` (S3-compatible stand-in, empty = Cloudflare),
-  `COOKIE_SECURE`, `CORS_ORIGINS`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`,
+  `COOKIE_SECURE`, `CORS_ORIGINS` (comma-separated origins, e.g. `https://filevault-client.vercel.app,http://localhost:3000`; trailing slashes are ignored), `ADMIN_EMAIL`, `ADMIN_PASSWORD`,
   `REDIS_HOST` (default `localhost`), `REDIS_PORT` (default `6379`), `REDIS_PASSWORD` (default empty),
   and the monitoring ones `MONITORING_PASSWORD`, `ACTUATOR_EXPOSE`, `RECORD_REQUESTS`, `SQL_LOG_LEVEL` (see "Monitoring").
 - `app.abuse.{warn-after,blacklist-after,window}` configure the denial → warning → blacklist ladder (see
