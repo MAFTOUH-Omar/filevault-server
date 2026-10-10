@@ -40,7 +40,7 @@ spring:
     change-log: classpath:db/changelog/db.changelog-master.yaml
 
 server:
-  port: 8080
+  port: 3322
   # Behind a reverse proxy (nginx/Caddy/OCI load balancer) request.getRemoteAddr() would be the proxy
   # for everyone, collapsing the per-IP rate limits, blacklist and abuse counter into one bucket.
   # "native" makes Tomcat's RemoteIpValve resolve the real client IP from X-Forwarded-For, honoring
@@ -61,7 +61,14 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        # Production: health,info (public, see MonitoringSecurityConfig). Anything else needs the monitoring
+        # login; e.g. ACTUATOR_EXPOSE=health,info,metrics,prometheus,httpexchanges,loggers while debugging.
+        include: ${ACTUATOR_EXPOSE:health,info}
+  endpoint:
+    health:
+      # Anonymous callers only get {"status":"UP"}; the monitoring user also sees db/redis component detail.
+      show-details: when-authorized
+      roles: MONITOR
 
 springdoc:
   api-docs:
@@ -100,6 +107,10 @@ app:
     cleanup-interval-seconds: 600
   cors:
     allowed-origins: ${CORS_ORIGINS:http://localhost:3000}
+  monitoring:
+    username: monitor
+    password: ${MONITORING_PASSWORD:}      # >= 16 chars; empty = no monitoring login at all
+    record-requests: ${RECORD_REQUESTS:false}   # keeps the last 500 requests for /actuator/httpexchanges
   bootstrap:
     admin-email: ${ADMIN_EMAIL:}
     admin-password: ${ADMIN_PASSWORD:}
@@ -120,3 +131,5 @@ app:
 logging:
   level:
     com.filevault: DEBUG
+    # SQL statements only (never bind values, which would put user data in the logs). DEBUG to see them.
+    org.hibernate.SQL: ${SQL_LOG_LEVEL:INFO}

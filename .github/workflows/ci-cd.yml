@@ -1,0 +1,113 @@
+name: CI/CD
+
+# Pull requests (including from forks): tests + Docker build only, no secrets are available to them.
+# Push to main: the same checks, then deploy to the Oracle Cloud VM over SSH.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  # Never cancel a run that is deploying; only superseded pull-request runs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: filevault
+          POSTGRES_USER: filevault
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U filevault -d filevault"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # Throw-away values for the service containers above. Real secrets never enter CI.
+      DB_USER: filevault
+      DB_PASSWORD: ci-only-password
+      JWT_SECRET: Y2ktb25seS1ub3QtYS1yZWFsLXNlY3JldC0wMTIzNDU2Nzg5YWI=
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "27"
+          cache: maven
+
+      - name: Run tests
+        run: |
+          chmod +x mvnw
+          ./mvnw --batch-mode --no-transfer-progress verify
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports
+          retention-days: 7
+
+  docker-build:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      # Catches a broken Dockerfile/pom before it reaches the server (tests are skipped inside the image).
+      - run: docker build --tag filevault-server:ci .
+
+  deploy:
+    name: Deploy to Oracle Cloud
+    needs: [test, docker-build]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Secrets live in this environment, which should be restricted to the main branch (see CLAUDE.md).
+    environment: production
+    steps:
+      - name: Prepare SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VM_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      # The key is locked on the VM to a forced command (deploy/deploy.sh), so the command given here is ignored:
+      # whatever is typed, the server only ever runs the deploy script. Host key is pinned, never trusted on first use.
+      - name: Deploy
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
+            "$VM_USER@$VM_HOST" deploy
+
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

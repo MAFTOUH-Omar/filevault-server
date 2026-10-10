@@ -17,7 +17,7 @@ Build/run via the Maven wrapper (do not rely on a globally installed `mvn`):
 
 ```
 ./mvnw clean install       # build
-./mvnw spring-boot:run     # run the app (port 8080)
+./mvnw spring-boot:run     # run the app (port 3322)
 ./mvnw test                # run all tests
 ./mvnw test -Dtest=FilevaultServerApplicationTests          # run a single test class
 ./mvnw test -Dtest=FilevaultServerApplicationTests#methodName  # run a single test method
@@ -42,7 +42,8 @@ On Windows use `mvnw.cmd` instead of `./mvnw` from `cmd.exe`/PowerShell if the w
   `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (startup fails if any is missing). Optional: `DB_URL`,
   `MAX_FILE_SIZE_BYTES` (default 200 MiB), `R2_ENDPOINT` (S3-compatible stand-in, empty = Cloudflare),
   `COOKIE_SECURE`, `CORS_ORIGINS`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`,
-  `REDIS_HOST` (default `localhost`), `REDIS_PORT` (default `6379`), `REDIS_PASSWORD` (default empty).
+  `REDIS_HOST` (default `localhost`), `REDIS_PORT` (default `6379`), `REDIS_PASSWORD` (default empty),
+  and the monitoring ones `MONITORING_PASSWORD`, `ACTUATOR_EXPOSE`, `RECORD_REQUESTS`, `SQL_LOG_LEVEL` (see "Monitoring").
 - `app.abuse.{warn-after,blacklist-after,window}` configure the denial → warning → blacklist ladder (see
   "Repeated denials" below).
 - `app.rate-limit.global.{limit,window}` and `app.rate-limit.auth.{limit,window}` configure the two
@@ -148,7 +149,7 @@ separate):
   `@RestControllerAdvice` — they write the same `ErrorResponse` shape themselves via the shared
   `ErrorResponseWriter`. See "Rate limiting & abuse protection" below.
 - `security/` — infrastructure that doesn't belong to any one domain: JWT encode/decode
-  (`JwtService`), `SecurityConfig`, `AuthorityMapper`, `RedisRateLimiter`, and a typed
+  (`JwtService`), `SecurityConfig`, `MonitoringSecurityConfig` (actuator chain), `AuthorityMapper`, `RedisRateLimiter`, and a typed
   `@ConfigurationProperties` record per `app.*` config block. Not part of the layering above on
   purpose — it's cross-cutting.
 - `storage/` — infrastructure for file contents, like `security/` not part of the domain layering:
@@ -351,7 +352,11 @@ as an allowed header — browsers upload straight to R2, so this is R2's CORS, n
 Testing without a Cloudflare account: `src/test/.../storage/FakeS3Server` is an in-memory path-style S3
 stand-in (`java -cp target/test-classes com.filevault.filevaultserver.storage.FakeS3Server 19000`, then run
 the app with `R2_ENDPOINT=http://127.0.0.1:19000` and dummy keys). It does **not** check signatures, so it
-proves the flow but not that R2 accepts the signed requests — that still needs a real bucket.
+proves the flow but not that R2 accepts the signed requests. Verified against a real R2 bucket (2026-10-10): the
+presigned PUT with signed Content-Type/Content-Length is accepted, `complete` sees the object and `delete` removes it.
+What it cannot verify from a script is the bucket's CORS rule: without it the browser's preflight gets
+`403 CORS not configured for this bucket` and the frontend reports a failed upload, while the server only ever sees
+`POST /api/files` and never `/complete`.
 
 ## Deploying behind a reverse proxy (Oracle Cloud)
 
@@ -361,9 +366,44 @@ proves the flow but not that R2 accepts the signed requests — that still needs
   its header is ignored and every user shares the proxy's IP.
 - Production env: `COOKIE_SECURE=true` (HTTPS), `CORS_ORIGINS` set to the real frontend origin, all `R2_*`
   vars, a strong `JWT_SECRET`; keep `.env` (or a systemd `EnvironmentFile`) readable by the app user only.
+- `docker compose up -d --build` runs the whole stack from `compose.yaml`: `api` (built from `Dockerfile`, port 3322, published on 127.0.0.1 only), `db` (Postgres), `redis`, and `caddy` (80/443, automatic HTTPS for the domain written in `Caddyfile`). The `api` container reads `.env` but compose overrides `DB_URL` and `REDIS_HOST` to the service names. Caddy replaces `X-Forwarded-For` with the real peer address, which is what the IP blacklist needs, and answers 404 for every `/actuator/*` path except `/actuator/health`.
 - Oracle specifics: open 443/80 in the VCN security list *and* in the instance firewall (Ubuntu images ship
   restrictive iptables rules); Ampere (ARM) shapes run the same JAR; keep Postgres and Redis on private
   addresses, not the public IP.
+
+## Monitoring (actuator)
+
+`/actuator/**` has its own security filter chain (`security/MonitoringSecurityConfig`, `@Order(1)`, before the JWT chain in
+`SecurityConfig`) with its own AuthenticationManager: `health` and `info` are public, every other exposed endpoint needs HTTP
+Basic as the single user `monitor` (role `MONITOR`) whose password is `MONITORING_PASSWORD` (>= 16 chars, checked at startup;
+empty = nobody can log in). API tokens do not work there and the monitoring login does not work on the API.
+- **Which endpoints exist** is `ACTUATOR_EXPOSE` (`management.endpoints.web.exposure.include`, default `health,info`). Production
+  keeps the default; while debugging use e.g. `health,info,metrics,prometheus,httpexchanges,loggers`. Never expose `*` or
+  `heapdump`/`env` on a public server.
+- `health` shows only the status to anonymous callers; the monitoring login also sees the db/redis components.
+- `RECORD_REQUESTS=true` registers an in-memory `HttpExchangeRepository` (last 500 requests, `config/MonitoringConfig`) for
+  `/actuator/httpexchanges`. Authorization and Cookie headers are not recorded (Boot default). Off by default.
+- `SQL_LOG_LEVEL` sets the `org.hibernate.SQL` logger (statements only, never bind values, so no user data in logs).
+- Wrong Basic credentials count as an abuse strike through `AbuseGuard` (`MonitoringAuthenticationEntryPoint`), so the 6th
+  guess blacklists the IP; sending no credentials does not.
+- `micrometer-registry-prometheus` serves `/actuator/prometheus`. Caddy hides it from the internet: scrape it from the compose
+  network (`api:3322`) or from the server through `127.0.0.1:3322` / an SSH tunnel, with `monitor` and `MONITORING_PASSWORD`.
+- Spring Boot Admin is deliberately not wired: it needs its own server application and a client dependency.
+
+## CI/CD (GitHub Actions → Oracle Cloud VM)
+
+`.github/workflows/ci-cd.yml`: pull requests (forks included, no secrets) and pushes to `main` run `Tests` (`./mvnw verify` against
+Postgres + Redis service containers with throw-away credentials, no `.env`) and `Docker image builds`. Only a push to `main` (or a
+manual run on `main`) continues to `deploy`, which runs in the GitHub environment `production` and SSHes to the VM.
+- The repo is public, so nothing secret may ever be written in the workflow. Secrets (environment `production`): `VM_HOST`, `VM_USER`,
+  `VM_SSH_KEY` (private key), `VM_KNOWN_HOSTS` (the VM's pinned host key line). Restrict the environment to the `main` branch.
+- The deploy key is locked in the VM's `~/.ssh/authorized_keys` to a forced command:
+  `restrict,command="bash /home/ubuntu/filevault-server/deploy/deploy.sh" ssh-ed25519 AAAA... github-actions`, so a leaked key can only
+  trigger a deploy, never open a shell.
+- `deploy/deploy.sh` (on the VM): checks `.env` exists, `git checkout -B main origin/main` (the VM mirrors `main`, never edit tracked
+  files there), `docker compose up -d --build`, waits for `/actuator/health` on `127.0.0.1:3322`, and rolls back to the previous
+  commit if the new one never becomes healthy (the job then fails). `.env` stays on the VM only, it is never part of a deploy.
+- Shell scripts, `Dockerfile` and `Caddyfile` are forced to LF in `.gitattributes`; a CRLF `deploy.sh` would not run on Linux.
 
 ## Rate limiting & abuse protection
 
