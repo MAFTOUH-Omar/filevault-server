@@ -398,7 +398,7 @@ manual run on `main`) continues to `deploy`, which runs in the GitHub environmen
 - The repo is public, so nothing secret may ever be written in the workflow. Secrets (environment `production`): `VM_HOST`, `VM_USER`,
   `VM_SSH_KEY` (private key), `VM_KNOWN_HOSTS` (the VM's pinned host key line). Restrict the environment to the `main` branch.
 - The deploy key is locked in the VM's `~/.ssh/authorized_keys` to a forced command:
-  `restrict,command="bash /home/ubuntu/filevault-server/deploy/deploy.sh" ssh-ed25519 AAAA... github-actions`, so a leaked key can only
+  `restrict,command="bash /opt/filevault/filevault-server/deploy/deploy.sh" ssh-ed25519 AAAA... github-actions`, so a leaked key can only
   trigger a deploy, never open a shell.
 - `deploy/deploy.sh` (on the VM): checks `.env` exists, `git checkout -B main origin/main` (the VM mirrors `main`, never edit tracked
   files there), `docker compose up -d --build`, waits for `/actuator/health` on `127.0.0.1:3322`, and rolls back to the previous
