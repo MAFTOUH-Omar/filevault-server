@@ -211,11 +211,12 @@ Self-registration (`RegisterAction`) always assigns the single configured defaul
 privilege-escalation surface and doesn't go through `RolePolicy`.
 
 ### User-facing identity: register/login/refresh/me all return the same shape
-`response/user/UserSummaryResponse` (id, email, fullName, storageUsedBytes, roles, permissions — plain names, not JWT
+`response/user/UserSummaryResponse` (id, email, fullName, storageUsedBytes, storageQuotaBytes, storageRemainingBytes, roles, permissions — plain names, not JWT
 `ROLE_`-prefixed authorities) is built from a `User` entity via `UserSummaryResponse.from(user)`, using
 `AuthorityMapper.roleNames`/`permissionNames`. `AuthResponse` embeds one (`register`/`login`/`refresh`
 all return it, so the client always knows what the new token can do without decoding the JWT).
-`storageUsedBytes` mirrors `usr_storage_used_bytes`; the upload/delete actions (not written yet) must
+`storageUsedBytes` mirrors `usr_storage_used_bytes`; `storageQuotaBytes` is the largest `rol_storage_quota_bytes` among the user's roles
+(same rule as `reserveStorage`; `null` = unlimited, 0 with no role) and `storageRemainingBytes` is `max(quota - used, 0)` (`null` when unlimited); the upload/delete actions (not written yet) must
 evict via `UserSummaryCacheEvictor` whenever they change that counter, or `/auth/me` shows a stale value
 for up to the 5-minute cache TTL.
 `GET /auth/me` returns the same shape, read from the DB *or cache* (see "Caching" below) — it's the
@@ -251,7 +252,7 @@ silently bypasses it. Current call sites: `AssignRoleAction`, `UnassignRoleActio
 archive-transfer (evicts every transferred user), `RoleProvisioner` (evicts every user of every role
 that gains a new `roles:give:<name>` permission when another role is created — this is the easy-to-miss
 one: creating role X can change what `roles:manage` holders are *entitled to*, even though their own
-roles didn't change), and `ChangeEmailAction`, and every file action that moves `usr_storage_used_bytes`
+roles didn't change), `UpdateRoleAction` (only when the role's quota changed: evicts every holder), and `ChangeEmailAction`, and every file action that moves `usr_storage_used_bytes`
 (`InitiateUploadAction`, `DeleteFileAction`, `PurgeExpiredUploadsAction`, the size-mismatch branch of
 `CompleteUploadAction`) since `/auth/me` exposes `storageUsedBytes`. Adding a new way for a user's
 roles/permissions/email/storage to
